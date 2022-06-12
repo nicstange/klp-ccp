@@ -756,7 +756,7 @@ preprocessor::_pp_token preprocessor::_read_next_plain_token()
     _grab_remarks_from(_tokenizers.top());
 
     if (raw_tok.is_eof()) {
-      _handle_eof_from_tokenizer(std::move(raw_tok));
+      _handle_eof_from_tokenizer(raw_tok);
       _maybe_pp_directive = true;
       goto again;
     }
@@ -790,7 +790,7 @@ preprocessor::_pp_token preprocessor::_read_next_plain_token()
   }
 }
 
-void preprocessor::_handle_eof_from_tokenizer(raw_pp_token &&eof_tok)
+void preprocessor::_handle_eof_from_tokenizer(const raw_pp_token &eof_tok)
 {
   // If the topmost inclusion tree node is an (unfinished) conditional
   // inclusion, that's an error.
@@ -921,7 +921,7 @@ void preprocessor::_handle_pp_directive()
     _grab_remarks_from(_tokenizers.top());
 
     if (tok.is_eof()) {
-      _handle_eof_from_tokenizer(std::move(tok));
+      _handle_eof_from_tokenizer(tok);
       break;
     }
 
@@ -979,7 +979,7 @@ void preprocessor::_handle_pp_directive()
       // Handling EOF is safe now after the conditional inclusion has
       // been popped.
       if (tok.is_eof())
-	_handle_eof_from_tokenizer(std::move(tok));
+	_handle_eof_from_tokenizer(tok);
 
       break;
 

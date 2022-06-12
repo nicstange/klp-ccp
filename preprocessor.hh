@@ -100,7 +100,7 @@ namespace klp
 
       _pp_token _read_next_plain_token();
 
-      void _handle_eof_from_tokenizer(raw_pp_token &&eof_tok);
+      void _handle_eof_from_tokenizer(const raw_pp_token &eof_tok);
 
       void _fixup_inclusion_node_ranges() noexcept;
 
