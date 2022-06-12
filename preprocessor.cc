@@ -181,9 +181,6 @@ public:
 		  const raw_pp_tokens_range &invocation_range);
 
 
-  const pp_result::macro& get_macro() const noexcept
-  { return _macro; }
-
   code_remarks& get_remarks() noexcept
   { return _remarks; }
 
