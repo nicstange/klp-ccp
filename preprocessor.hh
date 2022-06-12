@@ -98,7 +98,7 @@ namespace klp
 
       static pp_token_index _emit_pp_token(pp_result &r, _pp_token &&tok);
 
-      _pp_token _read_next_plain_token();
+      _pp_token _read_next_plain_token(const bool intermediate_eofs);
 
       void _handle_eof_from_tokenizer(const raw_pp_token &eof_tok);
 
@@ -124,7 +124,7 @@ namespace klp
 
       _pp_token
       _expand(_expansion_state &state,
-	      const std::function<_pp_token()> &token_reader,
+	      const std::function<_pp_token(const bool)> &token_reader,
 	      const bool from_cond_incl_cond = false);
 
       std::vector<_pp_token>

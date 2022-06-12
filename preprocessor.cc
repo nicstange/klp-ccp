@@ -358,12 +358,15 @@ pp_token_index preprocessor::read_next_token()
 
  read_next:
   _pp_token next_tok = _expand(*_root_expansion_state,
-			std::bind(&preprocessor::_read_next_plain_token, this));
+			       std::bind(&preprocessor::_read_next_plain_token,
+					 this,
+					 std::placeholders::_1));
   bool empty_seen = false;
   while (next_tok.is_empty()) {
     empty_seen = true;
     next_tok = _expand(*_root_expansion_state,
-		       std::bind(&preprocessor::_read_next_plain_token, this));
+		       std::bind(&preprocessor::_read_next_plain_token,
+				 this, std::placeholders::_1));
   }
   next_tok.expansion_history().clear();
 
@@ -731,7 +734,8 @@ pp_token_index preprocessor::_emit_pp_token(pp_result &r, _pp_token &&tok)
   return tok_index;
 }
 
-preprocessor::_pp_token preprocessor::_read_next_plain_token()
+preprocessor::_pp_token preprocessor::
+_read_next_plain_token(const bool intermediate_eofs)
 {
  again:
   // Has the final eof token been seen?
@@ -758,6 +762,14 @@ preprocessor::_pp_token preprocessor::_read_next_plain_token()
     if (raw_tok.is_eof()) {
       _handle_eof_from_tokenizer(raw_tok);
       _maybe_pp_directive = true;
+
+      if (!_eof && intermediate_eofs) {
+	const raw_pp_token_index eof_index
+	  = _pp_result->_get_last_raw_index() + 1;
+	return _pp_token{pp_token::type::eof, std::string{""},
+			 raw_pp_tokens_range{eof_index, eof_index}};
+      }
+
       goto again;
     }
 
@@ -1212,14 +1224,14 @@ void preprocessor::_handle_pp_directive()
 
 preprocessor::_pp_token
 preprocessor::_expand(_expansion_state &state,
-		      const std::function<_pp_token()> &token_reader,
+		      const std::function<_pp_token(const bool)> &token_reader,
 		      const bool from_cond_incl_cond)
 {
   const bool state_is_root = (&state == &*_root_expansion_state);
   bool raw_tokens_read = false;
   bool keep_cur_macro_invocation = false;
 
-  auto read_tok = [&]() {
+  auto read_tok = [&](const bool intermediate_eofs) {
     while (!state.expansion_stack.empty()) {
       _expansion_state::stack_entry &top = state.expansion_stack.top();
       if (top.next_token == top.tokens.size()) {
@@ -1243,12 +1255,12 @@ preprocessor::_expand(_expansion_state &state,
     }
 
     raw_tokens_read = state_is_root;
-    return token_reader();
+    return token_reader(intermediate_eofs);
   };
 
  read_next:
   _pp_token tok = (state.pending_tokens.empty()
-		   ? read_tok()
+		   ? read_tok(false)
 		   : std::move(state.pending_tokens.front()));
   if (!state.pending_tokens.empty())
     state.pending_tokens.pop();
@@ -1284,11 +1296,11 @@ preprocessor::_expand(_expansion_state &state,
 	pp_result::macro_invocation * const saved_cur_macro_invocation
 	  = _cur_macro_invocation;
 	raw_tokens_read = false;
-	_pp_token next_tok = read_tok();
+	_pp_token next_tok = read_tok(true);
 	while (next_tok.is_ws() || next_tok.is_newline() ||
 	       next_tok.is_empty()) {
 	  state.pending_tokens.push(std::move(next_tok));
-	  next_tok = read_tok();
+	  next_tok = read_tok(true);
 	}
 
 	if (next_tok.is_punctuator("(")) {
@@ -1316,7 +1328,7 @@ preprocessor::_expand(_expansion_state &state,
 	  state.expansion_stack.emplace(_handle_func_macro_invocation(
 						m->second,
 						tok.get_token_source().begin,
-						read_tok,
+						std::bind(read_tok, true),
 						&raw_tokens_read));
 	  keep_cur_macro_invocation = false;
 	  goto read_next;
@@ -1332,7 +1344,9 @@ preprocessor::_expand(_expansion_state &state,
 	  saved_cur_macro_invocation->_macro_nondef_constraints +=
 	    pp_result::macro_nondef_constraint{tok.get_value(), true};
 	}
-	state.pending_tokens.push(std::move(next_tok));
+
+	if (!next_tok.is_eof())
+	  state.pending_tokens.push(std::move(next_tok));
       }
 
     } else if (m == _macros.end() && _cur_macro_invocation) {
@@ -1345,13 +1359,14 @@ preprocessor::_expand(_expansion_state &state,
       // not alter the result.
       pp_result::macro_invocation * const saved_cur_macro_invocation
 	= _cur_macro_invocation;
-      _pp_token next_tok = read_tok();
+      _pp_token next_tok = read_tok(true);
       while (next_tok.is_ws() || next_tok.is_newline() ||
 	     next_tok.is_empty()) {
 	state.pending_tokens.push(std::move(next_tok));
-	next_tok = read_tok();
+	next_tok = read_tok(true);
       }
-      state.pending_tokens.push(std::move(next_tok));
+      if (!next_tok.is_eof())
+	state.pending_tokens.push(std::move(next_tok));
 
       saved_cur_macro_invocation->_macro_nondef_constraints +=
 	pp_result::macro_nondef_constraint{tok.get_value(),
@@ -1367,7 +1382,7 @@ preprocessor::_expand(_expansion_state &state,
 	  tok = std::move(state.pending_tokens.front());
 	  state.pending_tokens.pop();
 	} else {
-	  tok = read_tok();
+	  tok = read_tok(false);
 	}
       } while (tok.is_ws() || tok.is_newline() || tok.is_empty());
       assert(state.pending_tokens.empty());
@@ -1376,7 +1391,7 @@ preprocessor::_expand(_expansion_state &state,
 	[&]() {
 	  if (tok.is_punctuator("(")) {
 	    std::tuple<_pp_tokens, _pp_tokens, _pp_token> arg =
-	      _create_macro_arg(read_tok, false, false);
+	      _create_macro_arg(std::bind(read_tok, true), false, false);
 	    const char arg_delim = std::get<2>(arg).get_value()[0];
 	    if (arg_delim == ',') {
 	      code_remark remark(code_remark::severity::fatal,
@@ -1809,7 +1824,7 @@ _create_macro_arg(const std::function<_pp_token()> &token_reader,
 
   if (expand) {
     _pp_tokens::const_iterator it_raw_tok = arg.cbegin();
-    auto read_arg_tok = [&]() {
+    auto read_arg_tok = [&](const bool) {
       if (it_raw_tok == arg.cend()) {
 	return _pp_token(pp_token::type::eof, std::string(),
 			 end_delim.get_token_source());
@@ -1882,7 +1897,7 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
   } else {
     // Run a macro expansion. Temporarily append the expanded pp_token
     // instances to _pp_result and drop them afterwards again.
-    auto read_tok = [&]() {
+    auto read_tok = [&](const bool) {
       const raw_pp_token_index tok_index =
 	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
       if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
@@ -2081,7 +2096,7 @@ _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
   // with them.
   _fixup_inclusion_node_ranges();
   auto read_tok =
-    [&]() {
+    [&](const bool) {
       const raw_pp_token_index tok_index =
 	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
       if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
