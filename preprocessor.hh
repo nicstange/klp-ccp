@@ -87,7 +87,6 @@ namespace klp
 
     private:
       class _macro_expander;
-      friend class _macro_expander;
 
       class _pp_token;
       typedef std::vector<_pp_token> _pp_tokens;
