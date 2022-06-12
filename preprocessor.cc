@@ -1744,109 +1744,80 @@ preprocessor::_handle_func_macro_invocation(
 
 std::tuple<preprocessor::_pp_tokens, preprocessor::_pp_tokens,
 	   preprocessor::_pp_token>
-preprocessor::_create_macro_arg(const std::function<_pp_token()> &token_reader,
-				const bool expand, const bool variadic)
+preprocessor::
+_create_macro_arg(const std::function<_pp_token()> &token_reader,
+		  const bool expand, const bool variadic)
 {
   _pp_tokens arg;
   _pp_tokens exp_arg;
   std::size_t lparens = 0;
-  _pp_token end_delim(pp_token::type::eof, std::string(), raw_pp_tokens_range());
+  _pp_token end_delim(pp_token::type::eof, std::string(),
+		      raw_pp_tokens_range());
+  _pp_token pending_ws (pp_token::type::eof, std::string(),
+			raw_pp_tokens_range());
+  bool last_was_ws = true; // Strip leading whitespace.
 
-  _pp_token pending_tok(pp_token::type::eof, std::string(), raw_pp_tokens_range());
-  bool pending_tok_valid = false;
+  while (true) {
+    _pp_token tok = token_reader();
 
-  bool leading_ws = true; // Strip leading whitespace.
-  auto read_arg_tok = [&]() {
-    _pp_token tok =
-      [&]() {
-	if (!pending_tok_valid || pending_tok.is_ws()) {
-	  while (true) {
-	    _pp_token tok = token_reader();
-
-	    if (tok.is_empty())
-	      continue;
-
-	    if (tok.is_eof()) {
-	      code_remark remark
-		(code_remark::severity::fatal,
-		 "no closing right parenthesis in macro invocation",
-		 _pp_token_to_source(tok), _pp_token_to_range_in_file(tok));
-	      _remarks.add(remark);
-	      throw pp_except(remark);
-	    }
-
-	    // Turn all whitespace into single spaces.
-	    if (tok.is_newline()) {
-	      tok.set_type_and_value(pp_token::type::ws, " ");
-	    } else if (tok.is_ws() && tok.get_value().size() > 1) {
-	      tok.set_type_and_value(pp_token::type::ws, " ");
-	    }
-
-	    if (pending_tok_valid && tok.is_ws()) {
-	      assert(pending_tok.is_ws());
-	      // Skip multiple consecutive whitespace.
-	      continue;
-
-	    } else if (leading_ws && tok.is_ws()) {
-	      // Drop leading whitespace.
-	      assert(!pending_tok_valid);
-	      continue;
-
-	    } else if (tok.is_ws()) {
-	      // Queue pending whitespace and examine next token.
-	      assert(!pending_tok_valid);
-	      pending_tok = std::move(tok);
-	      pending_tok_valid = true;
-	      continue;
-
-	    } else if (!lparens &&
-		       ((!variadic && tok.is_punctuator(",")) ||
-			tok.is_punctuator(")"))) {
-	      // End of macro argument. Skip queued whitespace.
-	      pending_tok_valid = false;
-	      end_delim = std::move(tok);
-	      return _pp_token(pp_token::type::eof, std::string(),
-			       end_delim.get_token_source());
-
-	    } else if (pending_tok_valid) {
-	      // Return queued whitespace and queue next non-whitespace
-	      // token.
-	      assert(pending_tok.is_ws());
-	      std::swap(pending_tok, tok);
-	      return tok;
-
-	    } else {
-	      // No queued whitespace and current token also isn't
-	      // whitespace, return it.
-	      leading_ws = false;
-	      return tok;
-	    }
-	  }
-
-	} else {
-	  // Return queued non-whitespace token.
-	  leading_ws = false;
-	  _pp_token tok = std::move(pending_tok);
-	  assert(!tok.is_ws() || tok.is_eof());
-	  pending_tok_valid = false;
-	  return tok;
-	}
-      }();
-
-    if (tok.is_punctuator("(")) {
-      ++lparens;
-    } else if (tok.is_punctuator(")")) {
-      --lparens;
+    if (tok.is_eof()) {
+      code_remark remark
+	(code_remark::severity::fatal,
+	 "no closing right parenthesis in macro invocation",
+	 _pp_token_to_source(tok), _pp_token_to_range_in_file(tok));
+      _remarks.add(remark);
+      throw pp_except(remark);
     }
 
-    if (!tok.is_eof())
-      arg.push_back(tok);
-    return tok;
-  };
+    if (tok.is_empty())
+      continue;
 
-  if (!expand) {
-    while (read_arg_tok().get_type() != pp_token::type::eof) {}
-  } else {
+    // Turn all newlines into whitespace.
+    if (tok.is_newline())
+      tok.set_type_and_value(pp_token::type::ws, " ");
+
+    if (tok.is_ws()) {
+      if (last_was_ws) // Skip multiple consecutive whitespace tokens.
+	continue;
+
+      // Normalize multiple whitespaces into a single one.
+      if (tok.get_value().size() > 1)
+	tok.set_type_and_value(pp_token::type::ws, " ");
+      pending_ws = std::move(tok);
+      last_was_ws = true;
+      continue;
+    }
+
+    if (!lparens &&
+	((!variadic && tok.is_punctuator(",")) || tok.is_punctuator(")"))) {
+      // End of macro argument. Skip queued whitespace.
+      end_delim = std::move(tok);
+      break;
+    }
+
+    if (tok.is_punctuator("("))
+      lparens++;
+    else if (tok.is_punctuator(")"))
+      lparens--;
+
+    if (last_was_ws && pending_ws.is_ws())
+      arg.push_back(pending_ws);
+
+    arg.push_back(tok);
+    last_was_ws = false;
+  }
+
+  if (expand) {
+    _pp_tokens::const_iterator it_raw_tok = arg.cbegin();
+    auto read_arg_tok = [&]() {
+      if (it_raw_tok == arg.cend()) {
+	return _pp_token(pp_token::type::eof, std::string(),
+			 end_delim.get_token_source());
+      }
+
+      return *it_raw_tok++;
+    };
+
     _expansion_state state;
     while(true) {
       auto tok = _expand(state, read_arg_tok);
