@@ -187,6 +187,11 @@ public:
   std::vector<_pp_token> expand();
 
 private:
+  static std::vector<_pp_token>
+  _expand_builtin_special(preprocessor &preprocessor,
+			  const pp_result::macro &macro,
+			  const raw_pp_token_index id_tok);
+
   _pp_token _read_next_token();
 
   const _pp_tokens*
@@ -227,7 +232,6 @@ private:
 
   bool _emit_empty_tok;
   bool _last_tok_was_empty_or_ws;
-  bool _is_builtin_special;
 };
 
 struct preprocessor::_cond_incl_state
@@ -2395,8 +2399,7 @@ _macro_expander(preprocessor &preprocessor,
   : _preprocessor(preprocessor), _macro(macro),
     _invocation_range(invocation_range),
     _it_repl(_macro.get_repl().cbegin()), _cur_arg(nullptr),
-    _emit_empty_tok(true), _last_tok_was_empty_or_ws(false),
-    _is_builtin_special(macro.is_builtin_special())
+    _emit_empty_tok(true), _last_tok_was_empty_or_ws(false)
 {
   assert(args.size() == exp_args.size());
 
@@ -2416,15 +2419,67 @@ _macro_expander(preprocessor &preprocessor,
 
 std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 {
-    std::vector<_pp_token> result;
+  if (_macro.is_builtin_special()) {
+    return _expand_builtin_special(_preprocessor, _macro,
+				   _invocation_range.begin);
+  }
 
-    _pp_token tok = _read_next_token();
-    while (!tok.is_eof()) {
-      result.emplace_back(std::move(tok));
-      tok = _read_next_token();
+  std::vector<_pp_token> result;
+
+  _pp_token tok = _read_next_token();
+  while (!tok.is_eof()) {
+    result.emplace_back(std::move(tok));
+    tok = _read_next_token();
+  }
+
+  return result;
+}
+
+std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::
+_expand_builtin_special(preprocessor &preprocessor,
+			const pp_result::macro &m,
+			const raw_pp_token_index id_tok)
+{
+  std::vector<preprocessor::_pp_token> result;
+  const raw_pp_tokens_range invocation_range{id_tok};
+
+  if (m.get_name() == "__FILE__") {
+    const auto &source =
+      preprocessor._raw_pp_tokens_range_to_source(invocation_range);
+
+    result.emplace_back(pp_token::type::str, source.get_filename(),
+			invocation_range, pp_result::used_macros{});
+
+  } else if (m.get_name() == "__BASE_FILE__") {
+    result.emplace_back(pp_token::type::str, preprocessor._base_file,
+			invocation_range, pp_result::used_macros{});
+
+  } else if (m.get_name() == "__LINE__") {
+      const auto &source =
+	preprocessor._raw_pp_tokens_range_to_source(invocation_range);
+      const auto &range_in_file =
+	preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range);
+      const auto line = source.offset_to_line_col(range_in_file.begin).first;
+
+      result.emplace_back(pp_token::type::pp_number, std::to_string(line),
+			  invocation_range, pp_result::used_macros{});
+
+  } else if (m.get_name() == "__INCLUDE_LEVEL__") {
+    result.emplace_back(pp_token::type::pp_number,
+			std::to_string(preprocessor._tokenizers.size() - 1),
+			invocation_range, pp_result::used_macros{});
+
+  } else if (m.get_name() == "__COUNTER__") {
+    result.emplace_back(pp_token::type::pp_number,
+			std::to_string(preprocessor.__counter__++),
+			invocation_range, pp_result::used_macros{});
+
+  } else {
+      assert(0);
+      __builtin_unreachable();
     }
 
-    return result;
+  return result;
 }
 
 const preprocessor::_pp_tokens* preprocessor::_macro_expander::
@@ -2584,7 +2639,6 @@ _yield_empty_token()
 		   _invocation_range};
 }
 
-
 preprocessor::_pp_token preprocessor::_macro_expander::
 _read_next_token()
 {
@@ -2734,65 +2788,6 @@ _read_next_token()
 
   assert(_it_repl == _macro.get_repl().end() ||
 	 !_it_repl->is_punctuator("##"));
-
-  if (_is_builtin_special) {
-    // Unset _is_builtin_special. After yielding the actual content
-    // token just below, this macro will be handled like a normal
-    // object macro whose expansion list has been exhausted.
-    _is_builtin_special = false;
-
-    if (_macro.get_name() == "__FILE__") {
-      const auto &source =
-	_preprocessor._raw_pp_tokens_range_to_source(_invocation_range);
-      return _pp_token{
-		pp_token::type::str,
-		source.get_filename(),
-		_invocation_range,
-		_tok_expansion_history_init()
-	     };
-
-    } else if (_macro.get_name() == "__BASE_FILE__") {
-      return _pp_token{
-		pp_token::type::str,
-		_preprocessor._base_file,
-		_invocation_range,
-		_tok_expansion_history_init()
-	     };
-
-    } else if (_macro.get_name() == "__LINE__") {
-      const auto &source =
-	_preprocessor._raw_pp_tokens_range_to_source(_invocation_range);
-      const auto &range_in_file =
-	_preprocessor._raw_pp_tokens_range_to_range_in_file(_invocation_range);
-      const auto line = source.offset_to_line_col(range_in_file.begin).first;
-      return _pp_token{
-		pp_token::type::pp_number,
-		std::to_string(line),
-		_invocation_range,
-		_tok_expansion_history_init()
-	     };
-
-    } else if (_macro.get_name() == "__INCLUDE_LEVEL__") {
-      return _pp_token{
-		pp_token::type::pp_number,
-		std::to_string(_preprocessor._tokenizers.size() - 1),
-		_invocation_range,
-		_tok_expansion_history_init()
-	     };
-
-    } else if (_macro.get_name() == "__COUNTER__") {
-      return _pp_token{
-		pp_token::type::pp_number,
-		std::to_string(_preprocessor.__counter__++),
-		_invocation_range,
-		_tok_expansion_history_init()
-	     };
-
-    } else {
-      assert(0);
-      __builtin_unreachable();
-    }
-  }
 
   // Process all but the last operands of a ## concatenation.
   while(_it_repl != _macro.get_repl().end() &&
