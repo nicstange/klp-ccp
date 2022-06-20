@@ -1,4 +1,4 @@
-/*
+ /*
  * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
@@ -192,46 +192,21 @@ private:
 			  const pp_result::macro &macro,
 			  const raw_pp_token_index id_tok);
 
-  _pp_token _read_next_token();
-
   const _pp_tokens*
   _resolve_arg(const std::string &name, const bool expanded)
     const noexcept;
 
-  pp_result::used_macros _tok_expansion_history_init() const;
-
-  bool _is_stringification(raw_pp_tokens::const_iterator it)
-    const noexcept;
-
-  raw_pp_tokens::const_iterator
-  _skip_stringification_or_single(const raw_pp_tokens::const_iterator &it)
-    const noexcept;
-
-  bool _is_concat_op(const raw_pp_tokens::const_iterator &it)
-    const noexcept;
-
-  _pp_token _handle_stringification();
-
-  void _add_concat_token(const _pp_token &tok);
-  void _add_concat_token(const raw_pp_token &raw_tok);
-  _pp_token _yield_concat_token();
-  _pp_token _yield_empty_token();
+  static std::string _stringify(const std::vector<_pp_token> &arg_toks);
 
   preprocessor &_preprocessor;
   const pp_result::macro &_macro;
-  std::map<std::string,
-	   std::pair<_pp_tokens, _pp_tokens> > _args;
+
+  typedef std::vector<std::pair<_pp_tokens, _pp_tokens> > _args_type;
+  _args_type _args;
+  std::map<std::string, _args_type::size_type> _args_name_map;
+
   const raw_pp_tokens_range _invocation_range;
   code_remarks _remarks;
-
-  raw_pp_tokens::const_iterator _it_repl;
-  const _pp_tokens *_cur_arg;
-  _pp_tokens::const_iterator _cur_arg_it;
-
-  std::unique_ptr<_pp_token> _concat_token;
-
-  bool _emit_empty_tok;
-  bool _last_tok_was_empty_or_ws;
 };
 
 struct preprocessor::_cond_incl_state
@@ -2397,21 +2372,17 @@ _macro_expander(preprocessor &preprocessor,
 		std::vector<_pp_tokens> &&exp_args,
 		const raw_pp_tokens_range &invocation_range)
   : _preprocessor(preprocessor), _macro(macro),
-    _invocation_range(invocation_range),
-    _it_repl(_macro.get_repl().cbegin()), _cur_arg(nullptr),
-    _emit_empty_tok(true), _last_tok_was_empty_or_ws(false)
+    _invocation_range(invocation_range)
 {
   assert(args.size() == exp_args.size());
 
   auto arg_it = args.begin();
   auto exp_arg_it = exp_args.begin();
-  size_t i = 0;
   for (auto arg_name : _macro.get_arg_names()) {
-    assert(_macro.shall_expand_arg(i) || exp_arg_it->empty());
-    ++i;
-    _args.insert(std::make_pair(arg_name,
-				std::make_pair(std::move(*arg_it++),
-					       std::move(*exp_arg_it++))));
+    assert(_macro.shall_expand_arg(_args.size()) || exp_arg_it->empty());
+    _args_name_map.insert(std::make_pair(arg_name, _args.size()));
+    _args.emplace_back(std::make_pair(std::move(*arg_it++),
+				      std::move(*exp_arg_it++)));
   }
   args.clear();
   exp_args.clear();
@@ -2424,13 +2395,320 @@ std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 				   _invocation_range.begin);
   }
 
-  std::vector<_pp_token> result;
+  // This is the core of macro expansion.
+  //
+  // The macro expansion will insert empty dummy tokens at various
+  // locations to allow the higher levels,
+  // preprocessor::read_next_token() in particular, to separate
+  // certain productions from surrounding context. These locations are
+  // - before and after the whole macro expansion
+  // - before and after a concatentation chain
+  // - before and after the emission of an expanded macro parameter.
+  // This is needed such that
+  //    #define __concat(a,b) :a ## b:
+  //    :__concat(::a,b::):
+  // can evaluate to
+  //    : ::ab:: :
+  // and so on.
+  //
+  // For the non-expanded argument values, which are used in
+  // concatenations and stringifications, the associated _pp_tokens
+  // sequence must not contain any
+  // - empty token,
+  // - multiple consecutive whitespace tokens or
+  // - leading or trailing whitespace.
+  //
+  const auto &m = _macro;
+  const auto &repl_toks = m.get_repl();
 
-  _pp_token tok = _read_next_token();
-  while (!tok.is_eof()) {
-    result.emplace_back(std::move(tok));
-    tok = _read_next_token();
+  auto &&is_stringification =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      return m.is_func_like() && it_repl->is_punctuator("#");
+    };
+
+  auto &&advance_it_repl =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      assert(it_repl != repl_toks.end());
+      if (is_stringification(it_repl)) {
+	assert(it_repl + 1 != repl_toks.end());
+	assert((it_repl + 1)->is_id());
+	return it_repl + 2;
+      }
+
+      return it_repl + 1;
+    };
+
+  auto &&is_vaargs =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      return (m.is_variadic() && it_repl->is_id() &&
+	      it_repl->get_value() == m.get_arg_names().back());
+    };
+
+  auto &&stringify =
+    [&](const raw_pp_tokens::const_iterator it_arg_id_tok) {
+      assert(it_arg_id_tok != repl_toks.end());
+      assert(it_arg_id_tok->is_id());
+      auto arg = _resolve_arg(it_arg_id_tok->get_value(), false);
+      assert(arg);
+
+      // Mark macro argument tokens participating in stringifications
+      // as non-passthrough.
+      for (auto &&it_tok = (*arg).begin(); it_tok != (*arg).end(); ++it_tok) {
+	if (it_tok->get_passed_through_raw_token() !=
+	    _pp_token::not_passed_through) {
+	  assert(_preprocessor._cur_macro_invocation);
+	  _preprocessor._cur_macro_invocation
+	    ->_add_non_passthrough_macro_arg_token
+		(it_tok->get_passed_through_raw_token());
+	}
+      }
+
+      return _stringify(*arg);
+    };
+
+  std::vector<_pp_token> result;
+  // Start the macro expansion with an empty token.
+  result.emplace_back(pp_token::type::empty, std::string{}, _invocation_range);
+  bool last_was_ws_or_empty = true;
+  for (raw_pp_tokens::const_iterator it_repl = repl_toks.cbegin(), it_repl_next;
+       it_repl != repl_toks.end(); it_repl = it_repl_next) {
+    it_repl_next = advance_it_repl(it_repl);
+
+    if (it_repl_next != repl_toks.end() && it_repl_next->is_punctuator("##")) {
+      assert(it_repl_next + 1 != repl_toks.end());
+
+      // Handle the GNU extension that in a sequence of
+      //  , ## __VA_ARGS__
+      // the comma gets removed if __VA_ARGS__ is empty.
+      if (it_repl->is_punctuator(",") && is_vaargs(it_repl_next + 1)
+	  && (it_repl_next + 2 == repl_toks.end() ||
+	      !(it_repl_next + 2)->is_punctuator("##"))) {
+	if (!_args.back().first.empty()) {
+	  result.emplace_back(it_repl->get_type(), it_repl->get_value(),
+			      _invocation_range);
+	  last_was_ws_or_empty = false;
+	}
+
+	++it_repl_next;
+	continue;
+      }
+
+      // Otherwise it's a concatenation.
+      _pp_token concat_result{pp_token::type::empty, std::string{},
+			      _invocation_range};
+      assert(!it_repl->is_ws());
+      if (is_stringification(it_repl)) {
+	concat_result.set_type_and_value(pp_token::type::str,
+					 stringify(it_repl + 1));
+
+      } else {
+	const std::vector<_pp_token> * arg = nullptr;
+	if (it_repl->is_id())
+	  arg = _resolve_arg(it_repl->get_value(), false);
+
+	if (arg) {
+	  // Emit an empty token, if needed.
+	  if (!last_was_ws_or_empty) {
+	    result.emplace_back(pp_token::type::empty, std::string{},
+				_invocation_range);
+	    last_was_ws_or_empty = true;
+	  }
+	  if (!arg->empty()) {
+	    if (arg->size() > 1) {
+	      // Only the argument's last token participates in
+	      // concatenation, the rest gets emitted verbatim.
+	      for (auto it_arg_tok = arg->begin();
+		   it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
+		assert(!it_arg_tok->is_empty());
+		result.emplace_back(it_arg_tok->get_type(),
+				    it_arg_tok->get_value(),
+				    _invocation_range,
+				    it_arg_tok->expansion_history(),
+				    it_arg_tok->get_passed_through_raw_token());
+	      }
+	    }
+
+	    concat_result.set_type_and_value(arg->back().get_type(),
+					     arg->back().get_value());
+	    concat_result.expansion_history() +=
+	      arg->back().expansion_history();
+
+	    // Mark macro argument tokens participating in
+	    // concatenations as non-passthrough.
+	    if (arg->back().get_passed_through_raw_token() !=
+		_pp_token::not_passed_through) {
+	      _preprocessor._cur_macro_invocation
+		->_add_non_passthrough_macro_arg_token
+			(arg->back().get_passed_through_raw_token());
+	    }
+
+	  }
+	} else {
+	  concat_result.set_type_and_value(it_repl->get_type(),
+					   it_repl->get_value());
+	}
+      }
+
+      while (it_repl_next != repl_toks.end() &&
+	     it_repl_next->is_punctuator("##")) {
+	it_repl = it_repl_next + 1;
+	assert(it_repl != repl_toks.end());
+	assert(!it_repl->is_ws());
+	it_repl_next = advance_it_repl(it_repl);
+
+	if (is_stringification(it_repl)) {
+	  concat_result.concat(_pp_token{
+					pp_token::type::str,
+					stringify(it_repl + 1),
+					_invocation_range
+			       },
+			       _preprocessor, _remarks);
+
+	} else if (it_repl->is_punctuator(",") &&
+		   it_repl_next != repl_toks.end() &&
+		   it_repl_next->is_punctuator("##") &&
+		   it_repl_next + 1 != repl_toks.end() &&
+		   is_vaargs(it_repl_next + 1) &&
+		   (it_repl_next + 2 == repl_toks.end() ||
+		    !(it_repl_next + 2)->is_punctuator("##"))) {
+	  // Handle the GNU extension that in a sequence of
+	  //  ... ## , ## __VA_ARGS__,
+	  // the comma gets removed if __VA_ARGS__ is empty.
+	  if (!_args.back().first.empty()) {
+	    concat_result.concat(_pp_token{
+					it_repl->get_type(),
+					it_repl->get_value(),
+					_invocation_range
+				 },
+				 _preprocessor, _remarks);
+	  }
+
+	  ++it_repl_next;
+
+	} else {
+	  const std::vector<_pp_token> * arg = nullptr;
+	  if (it_repl->is_id())
+	    arg = _resolve_arg(it_repl->get_value(), false);
+	  if (arg) {
+	    if (arg->empty())
+	      continue;
+
+	    concat_result.concat(_pp_token{
+					arg->front().get_type(),
+					arg->front().get_value(),
+					_invocation_range,
+					arg->front().expansion_history()
+				 },
+				 _preprocessor, _remarks);
+
+	    // Mark macro argument tokens participating in
+	    // concatenations as non-passthrough.
+	    if (arg->front().get_passed_through_raw_token() !=
+		_pp_token::not_passed_through) {
+	      _preprocessor._cur_macro_invocation
+		->_add_non_passthrough_macro_arg_token
+			(arg->front().get_passed_through_raw_token());
+	    }
+
+	    if (arg->size() == 1)
+	      continue;
+
+	    // Only the argument's first token participates in the
+	    // pending concatenation. Any intermediate surplus tokens
+	    // are emitted verbatim, the last one might start a
+	    // subsequent concatenation operation, if any.
+	    result.emplace_back(std::move(concat_result));
+	    for (auto it_arg_tok = arg->begin() + 1;
+		 it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
+	      assert(!it_arg_tok->is_empty());
+	      result.emplace_back(it_arg_tok->get_type(),
+				  it_arg_tok->get_value(),
+				  _invocation_range,
+				  it_arg_tok->expansion_history(),
+				  it_arg_tok->get_passed_through_raw_token());
+	    }
+
+	    concat_result.set_type_and_value(arg->back().get_type(),
+					     arg->back().get_value());
+	    concat_result.expansion_history() +=
+	      arg->back().expansion_history();
+
+	    if (it_repl_next != repl_toks.end() &&
+		it_repl_next->is_punctuator("##")) {
+	      // Mark macro argument tokens participating in
+	      // concatenations as non-passthrough.
+	      if (arg->front().get_passed_through_raw_token() !=
+		  _pp_token::not_passed_through) {
+		_preprocessor._cur_macro_invocation
+		  ->_add_non_passthrough_macro_arg_token
+			(arg->front().get_passed_through_raw_token());
+	      }
+	    }
+
+	  } else {
+	    concat_result.concat(_pp_token{
+					it_repl->get_type(),
+					it_repl->get_value(),
+					_invocation_range
+				 },
+				 _preprocessor, _remarks);
+
+	  }
+	}
+      }
+
+      result.emplace_back(std::move(concat_result));
+      result.emplace_back(pp_token::type::empty, std::string{},
+			  _invocation_range);
+      last_was_ws_or_empty = true;
+
+    } else if (is_stringification(it_repl)) {
+      result.emplace_back(pp_token::type::str,
+			  stringify(it_repl + 1),
+			  _invocation_range);
+      last_was_ws_or_empty = false;
+
+    } else {
+      const std::vector<_pp_token> * arg = nullptr;
+
+      if (it_repl->is_id())
+	arg = _resolve_arg(it_repl->get_value(), true);
+
+      if (arg) {
+	if (!last_was_ws_or_empty) {
+	  result.emplace_back(pp_token::type::empty, std::string{},
+			      _invocation_range);
+	}
+
+	for (const auto &arg_tok : *arg) {
+	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value(),
+			      _invocation_range, arg_tok.expansion_history(),
+			      arg_tok.get_passed_through_raw_token());
+	}
+
+	if (!arg->empty() && !arg->back().is_empty()) {
+	  result.emplace_back(pp_token::type::empty, std::string{},
+			      _invocation_range);
+	}
+	last_was_ws_or_empty = true;
+
+      } else {
+	result.emplace_back(it_repl->get_type(), it_repl->get_value(),
+			    _invocation_range);
+	last_was_ws_or_empty = it_repl->is_ws();
+
+      }
+    }
   }
+
+  // Terminate the macro expansion with an empty token.
+  if (!last_was_ws_or_empty) {
+    result.emplace_back(pp_token::type::empty, std::string{},
+			_invocation_range);
+  }
+
+  for (auto &tok : result)
+    tok.expansion_history() += m;
 
   return result;
 }
@@ -2488,84 +2766,23 @@ _resolve_arg(const std::string &name, const bool expanded) const noexcept
   if (!_macro.is_func_like())
     return nullptr;
 
-  auto arg = _args.find(name);
-  if (arg == _args.end())
+  auto it_arg_mapping = _args_name_map.find(name);
+  if (it_arg_mapping == _args_name_map.end())
     return nullptr;
 
+  const auto &arg = _args[it_arg_mapping->second];
   const _pp_tokens *resolved
-    = expanded ? &arg->second.second : &arg->second.first;
+    = expanded ? &arg.second : &arg.first;
   return resolved;
 }
 
-pp_result::used_macros
-preprocessor::_macro_expander::_tok_expansion_history_init() const
+std::string preprocessor::_macro_expander::
+_stringify(const std::vector<_pp_token> &arg_toks)
 {
-  pp_result::used_macros eh;
-  eh += _macro;
-  return eh;
-}
-
-
-bool preprocessor::_macro_expander::
-_is_stringification(raw_pp_tokens::const_iterator it) const noexcept
-{
-  assert(it != _macro.get_repl().end());
-
-  if (!_macro.is_func_like() || !it->is_punctuator("#"))
-    return false;
-
-  assert((it + 1) != _macro.get_repl().end() && (it + 1)->is_id());
-
-  return true;
-}
-
-raw_pp_tokens::const_iterator preprocessor::_macro_expander::
-_skip_stringification_or_single(const raw_pp_tokens::const_iterator &it)
-  const noexcept
-{
-  assert(it != _macro.get_repl().end());
-
-  if (_macro.is_func_like() && it->is_punctuator("#")) {
-    assert(it + 1 != _macro.get_repl().end());
-    assert((it + 1)->is_id());
-    return it + 2;
-  }
-  return it + 1;
-}
-
-bool preprocessor::_macro_expander::
-_is_concat_op(const raw_pp_tokens::const_iterator &it) const noexcept
-{
-  return (it != _macro.get_repl().end() && it->is_punctuator("##"));
-}
-
-preprocessor::_pp_token preprocessor::_macro_expander::_handle_stringification()
-{
-  assert(_it_repl != _macro.get_repl().end());
-  assert(_it_repl->is_punctuator("#"));
-  assert(_it_repl + 1 != _macro.get_repl().end());
-  assert((_it_repl + 1)->is_id());
-
-  auto arg = _resolve_arg((_it_repl + 1)->get_value(), false);
-  assert(arg);
-
-  _it_repl += 2;
-
-
   // Concatenate the stringified argument tokens
   std::string s;
-  for (auto &&it_tok = (*arg).begin(); it_tok != (*arg).end(); ++it_tok) {
-    // Mark macro argument tokens participating in stringifications as
-    // non-passthrough.
-    if (it_tok->get_passed_through_raw_token() !=
-	_pp_token::not_passed_through) {
-      assert(_preprocessor._cur_macro_invocation);
-      _preprocessor._cur_macro_invocation->_add_non_passthrough_macro_arg_token
-	(it_tok->get_passed_through_raw_token());
-    }
-
+  for (auto &&it_tok = arg_toks.begin(); it_tok != arg_toks.end(); ++it_tok)
     s += it_tok->stringify();
-  }
 
   // And escape '\' and '"' characters
   for (auto &&it = s.begin(); it != s.end();) {
@@ -2577,333 +2794,9 @@ preprocessor::_pp_token preprocessor::_macro_expander::_handle_stringification()
     }
   }
 
-  return _pp_token(pp_token::type::str, std::move(s),
-		   _invocation_range);
+  return s;
 }
 
-void preprocessor::_macro_expander::
-_add_concat_token(const _pp_token &tok)
-{
-  assert(!tok.is_ws() && !tok.is_newline() && !tok.is_eof());
-
-  // Mark macro argument tokens participating in concatenations as
-  // non-passthrough.
-  if (tok.get_passed_through_raw_token() != _pp_token::not_passed_through) {
-    _preprocessor._cur_macro_invocation->_add_non_passthrough_macro_arg_token
-      (tok.get_passed_through_raw_token());
-  }
-
-  if (!_concat_token) {
-    _concat_token.reset(new _pp_token(tok.get_type(), tok.get_value(),
-				      _invocation_range,
-				      _tok_expansion_history_init()));
-    _concat_token->expansion_history() += tok.expansion_history();
-  } else {
-    _concat_token->concat(tok, _preprocessor, _remarks);
-  }
-}
-
-void preprocessor::_macro_expander::
-_add_concat_token(const raw_pp_token &raw_tok)
-{
-  assert(!raw_tok.is_ws() && !raw_tok.is_newline() && !raw_tok.is_eof());
-
-  if (!_concat_token) {
-    _concat_token.reset(new _pp_token(raw_tok.get_type(), raw_tok.get_value(),
-				      _invocation_range));
-  } else {
-    _pp_token tok {raw_tok.get_type(), raw_tok.get_value(),
-		   _invocation_range};
-    _concat_token->concat(tok, _preprocessor, _remarks);
-  }
-}
-
-preprocessor::_pp_token preprocessor::_macro_expander::
-_yield_concat_token()
-{
-  assert(_concat_token);
-  _pp_token tok = std::move(*_concat_token);
-  _concat_token.reset();
-  assert(!tok.is_ws() && !tok.is_empty());
-  _last_tok_was_empty_or_ws = false;
-  return tok;
-}
-
-preprocessor::_pp_token preprocessor::_macro_expander::
-_yield_empty_token()
-{
-  assert(!_last_tok_was_empty_or_ws);
-  _last_tok_was_empty_or_ws = true;
-  _emit_empty_tok = false;
-  return _pp_token{pp_token::type::empty, std::string{},
-		   _invocation_range};
-}
-
-preprocessor::_pp_token preprocessor::_macro_expander::
-_read_next_token()
-{
-  // This is the core of macro expansion.
-  //
-  // The next replacement token to emit is determined dynamically
-  // based on the current _macro_expander's state information
-  // and returned.
-  //
-  // The macro expansion will insert empty dummy tokens at various
-  // locations to allow the higher levels,
-  // preprocessor::read_next_token() in particular, to separate
-  // certain productions from surrounding context. These locations are
-  // - before and after the whole macro expansion
-  // - before and after a concatentation chain
-  // - before and after the emission of an expanded macro parameter.
-  // This is needed such that
-  //    #define __concat(a,b) :a ## b:
-  //    :__concat(::a,b::):
-  // can evaluate to
-  //    : ::ab:: :
-  // and so on.
-  //
-  // Finally, after the list of replacement tokens has been exhausted,
-  // a final pp_token::type::eof marker is returned.
-  //
-  // For the non-expanded argument values, which are used in
-  // concatenations and stringifications, the associated _pp_tokens
-  // sequence must not contain any
-  // - empty token,
-  // - multiple consecutive whitespace tokens or
-  // - leading or trailing whitespace.
-  //
-  if (_emit_empty_tok) {
-    _emit_empty_tok = false;
-    if (!_last_tok_was_empty_or_ws)
-      return _yield_empty_token();
-  }
-
-  // Continue processing the currently "active" parameter, if any.
-  bool in_concat = false;
-  if (_cur_arg) {
-  handle_arg:
-    assert(_cur_arg);
-    if (_cur_arg->empty()) {
-      _cur_arg = nullptr;
-      ++_it_repl;
-      if (_is_concat_op(_it_repl)) {
-	in_concat = true;
-	++_it_repl;
-      } else if (in_concat) {
-	// Last parameter in a sequence of concatenations.
-	// Emit an empty token afterwards.
-	in_concat = false;
-	if (_concat_token) {
-	  _emit_empty_tok = true;
-	  return _yield_concat_token();
-	}
-      } else {
-	// "Normal" parameter expansion, empty has already been emitted
-	// before it started.
-	assert(_last_tok_was_empty_or_ws);
-      }
-    } else if (_cur_arg_it == _cur_arg->begin() && in_concat) {
-      // We're at the beginning of a parameter's replacement list and
-      // that parameter has been preceeded by a ## concatenation
-      // operator in the macro replacement list.
-      assert(_cur_arg_it != _cur_arg->end());
-      assert(!_cur_arg_it->is_ws());
-      assert(!_cur_arg_it->is_empty());
-
-      _add_concat_token(*_cur_arg_it++);
-
-      assert(_cur_arg_it == _cur_arg->end() || !_cur_arg_it->is_empty());
-      assert(_cur_arg_it + 1 != _cur_arg->end() || !_cur_arg_it->is_ws());
-
-      // No more tokens left in current parameter's replacement list?
-      if (_cur_arg_it == _cur_arg->cend()) {
-	_cur_arg = nullptr;
-	++_it_repl;
-      }
-
-      // If there are some more elements in the current parameter's
-      // replacement list or the next token in macro replacement list
-      // isn't a concatenation operator, then we're done with
-      // concatenating and return the result.
-      if (_cur_arg || !_is_concat_op(_it_repl)) {
-	assert(_concat_token);
-	in_concat = false;
-	if (!_cur_arg) {
-	  // Last parameter in a sequence of concatenations.
-	  // Emit an empty token afterwards.
-	  _emit_empty_tok = true;
-	}
-	return _yield_concat_token();
-      }
-      // The else case, i.e. the current argument's replacement list
-      // has been exhausted and the parameter is followed by a ##
-      // concatenation operator in the macro's replacement list, is
-      // handled below.
-      assert(_it_repl != _macro.get_repl().end());
-      assert(_it_repl->is_punctuator("##"));
-      ++_it_repl;
-      assert(_it_repl != _macro.get_repl().end());
-
-    } else if (_is_concat_op(_it_repl + 1) &&
-	       _cur_arg_it + 1 == _cur_arg->end()) {
-      // This is the last token in the current parameter's replacement
-      // list and the next token is a ## operator. Prepare for the
-      // concatenation.
-      assert(!_cur_arg_it->is_empty());
-      assert(!_cur_arg_it->is_ws());
-
-      // The in_concat == true case would have been handled by the
-      // branch above.
-      assert(!in_concat);
-      in_concat = true;
-
-      _add_concat_token(*_cur_arg_it++);
-
-      assert (_cur_arg_it == _cur_arg->end());
-      _cur_arg = nullptr;
-      _it_repl += 2;
-    } else {
-      // Normal parameter substitution
-      assert(!in_concat);
-      assert(_cur_arg_it != _cur_arg->end());
-
-      auto tok = _pp_token(_cur_arg_it->get_type(), _cur_arg_it->get_value(),
-			   _invocation_range, _tok_expansion_history_init(),
-			   _cur_arg_it->get_passed_through_raw_token());
-      tok.expansion_history() += _cur_arg_it->expansion_history();
-      ++_cur_arg_it;
-      _last_tok_was_empty_or_ws = (tok.is_empty() || tok.is_ws());
-      if (_cur_arg_it == _cur_arg->cend()) {
-	if (!_last_tok_was_empty_or_ws)
-	  _emit_empty_tok = true;
-	_cur_arg = nullptr;
-	++_it_repl;
-      }
-      return tok;
-    }
-  }
-
- from_repl_list:
-  assert(_cur_arg == nullptr);
-
-  assert(_it_repl == _macro.get_repl().end() ||
-	 !_it_repl->is_punctuator("##"));
-
-  // Process all but the last operands of a ## concatenation.
-  while(_it_repl != _macro.get_repl().end() &&
-	_is_concat_op(_skip_stringification_or_single(_it_repl))) {
-    assert(!_it_repl->is_ws());
-    if (_it_repl->is_id()) {
-      _cur_arg = _resolve_arg(_it_repl->get_value(), false);
-      if (_cur_arg != nullptr) {
-	_cur_arg_it = _cur_arg->begin();
-	if (!_last_tok_was_empty_or_ws) {
-	  // The start of a concatenation sequence.  Emit an empty
-	  // token to separate the result from the tokens preceeding
-	  // it.
-	  return _yield_empty_token();
-	}
-	goto handle_arg;
-      }
-      // Remaining case of non-parameter identifier is handled below.
-    } else if (_macro.is_variadic() && _it_repl->is_punctuator(",") &&
-	       (_it_repl + 2)->is_id() &&
-	       (_it_repl + 2)->get_value() == _macro.get_arg_names().back()) {
-      // Handle the GNU extension that a in a sequence of
-      //  , ## __VA_ARGS__,
-      // the comma gets removed if __VA_ARGS__ is empty.
-      auto vaarg = _resolve_arg((_it_repl + 2)->get_value(), false);
-      assert(vaarg);
-      if (vaarg->empty()) {
-	// __VA_ARGS__ is empty, skip the comma.
-	_it_repl += 2;
-	continue;
-      } else {
-	// __VA_ARGS__ is not empty. What to do next depends on whether
-	// the comma has again been preceeded by a ## or not.
-	// In either case, the comma is not concatenated to the __VA_ARGS__,
-	// but each are treated separately.
-	if (in_concat) {
-	  _add_concat_token(*_it_repl);
-	  _it_repl += 2;
-	  in_concat = false;
-	  _last_tok_was_empty_or_ws = false;
-	  return _yield_concat_token();
-	} else {
-	  _pp_token tok{_it_repl->get_type(), _it_repl->get_value(),
-			_invocation_range};
-	  _it_repl += 2;
-	  _last_tok_was_empty_or_ws = false;
-	  return tok;
-	}
-      }
-    }
-
-    if (!_is_stringification(_it_repl)) {
-      _add_concat_token(*_it_repl++);
-    } else {
-      // Note that GCC gives priority to # over ## and so do we.
-      _add_concat_token(_handle_stringification());
-    }
-    assert(_it_repl->is_punctuator("##"));
-    ++_it_repl;
-    assert(!_it_repl->is_ws());
-    in_concat = true;
-  }
-
-  // At this point there's either no ## concatenation in progress
-  // or the current token is the very last operand.
-  if (_it_repl == _macro.get_repl().end()) {
-    assert(!in_concat);
-    if (!_last_tok_was_empty_or_ws) {
-      // Terminate the macro expansion with an empty in order to
-      // separate it from subsequent tokens.
-      return _yield_empty_token();
-    }
-    return _pp_token(pp_token::type::eof, std::string(),
-		     raw_pp_tokens_range{_invocation_range.end,
-					 _invocation_range.end});
-  }
-
-  if (_it_repl->is_id()) {
-    _cur_arg = _resolve_arg(_it_repl->get_value(), !in_concat);
-    if (_cur_arg != nullptr) {
-      _cur_arg_it = _cur_arg->begin();
-      if (!in_concat && !_last_tok_was_empty_or_ws) {
-	// Start of a "normal" parameter substitution. Emit an empty
-	// token in order to separate it from the preceeding one.
-	return _yield_empty_token();
-      }
-      goto handle_arg;
-    }
-  }
-
-  if (in_concat) {
-    assert(!_it_repl->is_ws());
-    if (_is_stringification(_it_repl))
-      _add_concat_token(_handle_stringification());
-    else
-      _add_concat_token(*_it_repl++);
-
-    assert(_concat_token);
-    in_concat = false;
-    _last_tok_was_empty_or_ws = false;
-    return _yield_concat_token();
-  }
-
-  if (_is_stringification(_it_repl)) {
-    _last_tok_was_empty_or_ws = false;
-    return _handle_stringification();
-  }
-
-  auto tok = _pp_token(_it_repl->get_type(), _it_repl->get_value(),
-		       _invocation_range,
-		       _tok_expansion_history_init());
-  ++_it_repl;
-
-  _last_tok_was_empty_or_ws = (tok.is_empty() || tok.is_ws());
-  return tok;
-}
 
 const pp_result::header_inclusion_node&
 preprocessor::get_pending_token_source(const raw_pp_token_index tok)
