@@ -1215,7 +1215,6 @@ preprocessor::_expand(_expansion_state &state,
       }
 
       _pp_token tok = top.tokens[top.next_token++];
-      tok.set_macro_invocation(_cur_macro_invocation);
 
       return tok;
     }
@@ -2584,8 +2583,10 @@ expand(preprocessor &preprocessor,
 			invocation_range);
   }
 
-  for (auto &tok : result)
+  for (auto &tok : result) {
+    tok.set_macro_invocation(&mi);
     tok.expansion_history() += m;
+  }
 
   return result;
 }
