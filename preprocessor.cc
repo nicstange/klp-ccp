@@ -1245,8 +1245,6 @@ preprocessor::_expand(_expansion_state &state,
 	  assert(tok_range.begin + 1 == tok_range.end);
 	  _cur_macro_invocation =
 	    &_pp_result->_add_macro_invocation(m->second, tok_range);
-	} else {
-	  _cur_macro_invocation->_used_macros += m->second;
 	}
 	state.expansion_stack.emplace(
 		_handle_object_macro_invocation(m->second, std::move(tok)));
@@ -1285,8 +1283,6 @@ preprocessor::_expand(_expansion_state &state,
 	    assert(tok_range.begin + 1 == tok_range.end);
 	    _cur_macro_invocation =
 	      &_pp_result->_add_macro_invocation(m->second, tok_range);
-	  } else {
-	    _cur_macro_invocation->_used_macros += m->second;
 	  }
 
 	  keep_cur_macro_invocation = true;
@@ -2587,6 +2583,8 @@ expand(preprocessor &preprocessor,
     tok.set_macro_invocation(&mi);
     tok.expansion_history() += m;
   }
+
+  mi._used_macros += m;
 
   return result;
 }
