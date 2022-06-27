@@ -1,4 +1,4 @@
- /*
+/*
  * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
@@ -139,9 +139,6 @@ public:
 
   std::string stringify() const;
 
-  void concat(const _pp_token &tok, preprocessor &p,
-	      code_remarks &remarks);
-
 private:
   template <pp_token::type... types>
   struct __is_type_any_of
@@ -197,6 +194,11 @@ private:
     const noexcept;
 
   static std::string _stringify(const std::vector<_pp_token> &arg_toks);
+
+  static _pp_token _concat(_pp_token &&tok1, _pp_token &&tok2,
+			   preprocessor &preprocessor,
+			   const raw_pp_tokens_range &invocation_range,
+			   code_remarks &remarks);
 
   preprocessor &_preprocessor;
   const pp_result::macro &_macro;
@@ -1494,104 +1496,6 @@ std::string preprocessor::_pp_token::stringify() const
   return pp_token::stringify(_type, _value);
 }
 
-void preprocessor::_pp_token::concat(const _pp_token &tok,
-				     preprocessor &p,
-				     code_remarks &remarks)
-{
-  assert(_type != pp_token::type::ws);
-  assert(tok._type != pp_token::type::ws);
-  assert(_type != pp_token::type::newline);
-  assert(tok._type != pp_token::type::newline);
-  assert(_type != pp_token::type::eof);
-  assert(tok._type != pp_token::type::eof);
-  assert(_type != pp_token::type::qstr);
-  assert(tok._type != pp_token::type::qstr);
-  assert(_type != pp_token::type::hstr);
-  assert(tok._type != pp_token::type::hstr);
-
-  _expansion_history += tok._expansion_history;
-  if (_type == pp_token::type::empty) {
-    _type = tok._type;
-    _value = tok._value;
-    return;
-  } else if (tok._type == pp_token::type::empty) {
-    return;
-  }
-
-  if (_type == pp_token::type::id && tok._type == pp_token::type::pp_number) {
-    if (!std::all_of(tok._value.cbegin(), tok._value.cend(),
-		     [](const char c) {
-		       return (c == '_' || ('a' <= c && c <= 'z') ||
-			       ('A' <= c && c <= 'Z') ||
-			       ('0' <= c && c <= '9'));
-		     })) {
-      code_remark remark
-	(code_remark::severity::fatal,
-	 "can't concatenate " + _value + " and " + tok._value,
-	 p._pp_token_to_source(tok), p._pp_token_to_range_in_file(tok));
-      remarks.add(remark);
-      throw pp_except(remark);
-    }
-
-    _value += tok._value;
-    return;
-  } else if (_type == pp_token::type::pp_number &&
-	     tok._type == pp_token::type::id) {
-    _value += tok._value;
-    return;
-  } else if (_type == pp_token::type::pp_number &&
-	     tok._type == pp_token::type::punctuator &&
-     (tok._value == "-" || tok._value == "+")) {
-    _value += tok._value;
-    return;
-  }
-
-  if (_type != tok._type) {
-    code_remark remark(code_remark::severity::fatal,
-		       "can't concatenate tokens of different type",
-		       p._pp_token_to_source(tok),
-		       p._pp_token_to_range_in_file(tok));
-    remarks.add(remark);
-    throw pp_except(remark);
-  } else if(_type == pp_token::type::chr || _type == pp_token::type::wchr) {
-    code_remark remark(code_remark::severity::fatal,
-		       "can't concatenate character constants",
-		       p._pp_token_to_source(tok),
-		       p._pp_token_to_range_in_file(tok));
-    remarks.add(remark);
-    throw pp_except(remark);
-  } else if (_type == pp_token::type::non_ws_char) {
-    code_remark remark(code_remark::severity::fatal,
-		       "can't concatenate " + _value + " and " + tok._value,
-		       p._pp_token_to_source(tok),
-		       p._pp_token_to_range_in_file(tok));
-    remarks.add(remark);
-    throw pp_except(remark);
-  }
-
-  _value += tok._value;
-
-  if (_type == pp_token::type::punctuator) {
-    if (_value != "->" && _value != "++" && _value != "--" && _value != "<<" &&
-	_value != ">>" && _value != "<=" && _value != ">=" && _value != "==" &&
-	_value != "!=" && _value != "&&" && _value != "||" && _value != "*=" &&
-	_value != "/=" && _value != "%=" && _value != "+=" && _value != "-=" &&
-	_value != "<<=" && _value != ">>=" && _value != "&=" &&
-	_value != "^=" && _value != "|=" && _value != "##" && _value != "<:" &&
-	_value != ":>" && _value != "<%" && _value != "%>" && _value != "%:" &&
-	_value != "%:%:") {
-      code_remark remark
-	(code_remark::severity::fatal,
-	 "can't concatenate " + _value + " and " + tok._value,
-	 p._pp_token_to_source(tok), p._pp_token_to_range_in_file(tok));
-      remarks.add(remark);
-      throw pp_except(remark);
-    }
-    return;
-  }
-}
-
-
 std::vector<preprocessor::_pp_token>
 preprocessor::_handle_object_macro_invocation(const pp_result::macro &macro,
 					      _pp_token &&id_tok)
@@ -2557,12 +2461,14 @@ std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 	it_repl_next = advance_it_repl(it_repl);
 
 	if (is_stringification(it_repl)) {
-	  concat_result.concat(_pp_token{
+	  concat_result = _concat(std::move(concat_result),
+				  _pp_token{
 					pp_token::type::str,
 					stringify(it_repl + 1),
 					_invocation_range
-			       },
-			       _preprocessor, _remarks);
+				  },
+				  _preprocessor, _invocation_range,
+				  _remarks);
 
 	} else if (it_repl->is_punctuator(",") &&
 		   it_repl_next != repl_toks.end() &&
@@ -2575,12 +2481,14 @@ std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 	  //  ... ## , ## __VA_ARGS__,
 	  // the comma gets removed if __VA_ARGS__ is empty.
 	  if (!_args.back().first.empty()) {
-	    concat_result.concat(_pp_token{
+	    concat_result = _concat(std::move(concat_result),
+				    _pp_token{
 					it_repl->get_type(),
 					it_repl->get_value(),
 					_invocation_range
-				 },
-				 _preprocessor, _remarks);
+				    },
+				    _preprocessor, _invocation_range,
+				    _remarks);
 	  }
 
 	  ++it_repl_next;
@@ -2593,13 +2501,15 @@ std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 	    if (arg->empty())
 	      continue;
 
-	    concat_result.concat(_pp_token{
+	    concat_result = _concat(std::move(concat_result),
+				    _pp_token{
 					arg->front().get_type(),
 					arg->front().get_value(),
 					_invocation_range,
 					arg->front().expansion_history()
-				 },
-				 _preprocessor, _remarks);
+				    },
+				    _preprocessor, _invocation_range,
+				    _remarks);
 
 	    // Mark macro argument tokens participating in
 	    // concatenations as non-passthrough.
@@ -2646,12 +2556,14 @@ std::vector<preprocessor::_pp_token> preprocessor::_macro_expander::expand()
 	    }
 
 	  } else {
-	    concat_result.concat(_pp_token{
+	    concat_result = _concat(std::move(concat_result),
+				    _pp_token{
 					it_repl->get_type(),
 					it_repl->get_value(),
 					_invocation_range
-				 },
-				 _preprocessor, _remarks);
+				    },
+				    _preprocessor, _invocation_range,
+				    _remarks);
 
 	  }
 	}
@@ -2795,6 +2707,119 @@ _stringify(const std::vector<_pp_token> &arg_toks)
   }
 
   return s;
+}
+
+preprocessor::_pp_token preprocessor::_macro_expander::
+_concat(_pp_token &&tok1, _pp_token &&tok2,
+	preprocessor &preprocessor,
+	const raw_pp_tokens_range &invocation_range,
+	code_remarks &remarks)
+{
+  assert(tok1.get_type() != pp_token::type::ws);
+  assert(tok2.get_type() != pp_token::type::ws);
+  assert(tok1.get_type() != pp_token::type::newline);
+  assert(tok2.get_type() != pp_token::type::newline);
+  assert(tok1.get_type() != pp_token::type::eof);
+  assert(tok2.get_type() != pp_token::type::eof);
+  assert(tok1.get_type() != pp_token::type::qstr);
+  assert(tok2.get_type() != pp_token::type::qstr);
+  assert(tok1.get_type() != pp_token::type::hstr);
+  assert(tok2.get_type() != pp_token::type::hstr);
+
+  if (tok1.get_type() == pp_token::type::empty) {
+    tok2.expansion_history() += tok1.expansion_history();
+    return std::move(tok2);
+  } else if (tok2.get_type() == pp_token::type::empty) {
+    tok1.expansion_history() += tok2.expansion_history();
+    return std::move(tok1);
+  }
+
+  pp_result::used_macros eh = tok1.expansion_history();
+  eh += tok2.expansion_history();
+  if (tok1.get_type() == pp_token::type::id &&
+      tok2.get_type() == pp_token::type::pp_number) {
+    if (!std::all_of(tok2.get_value().cbegin(), tok2.get_value().cend(),
+		     [](const char c) {
+		       return (c == '_' || ('a' <= c && c <= 'z') ||
+			       ('A' <= c && c <= 'Z') ||
+			       ('0' <= c && c <= '9'));
+		     })) {
+      code_remark remark
+	(code_remark::severity::fatal,
+	 "can't concatenate " + tok1.get_value() + " and " + tok2.get_value(),
+	 preprocessor._raw_pp_tokens_range_to_source(invocation_range),
+	 preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range));
+      remarks.add(remark);
+      throw pp_except(remark);
+    }
+
+    return _pp_token(pp_token::type::id,
+		     tok1.get_value() + tok2.get_value(),
+		     invocation_range, std::move(eh));
+
+  } else if (tok1.get_type() == pp_token::type::pp_number &&
+	     tok2.get_type() == pp_token::type::id) {
+    return _pp_token(pp_token::type::pp_number,
+		     tok1.get_value() + tok2.get_value(),
+		     invocation_range, std::move(eh));
+
+  } else if (tok1.get_type() == pp_token::type::pp_number &&
+	     tok2.get_type() == pp_token::type::punctuator &&
+	     (tok2.get_value() == "-" || tok2.get_value() == "+")) {
+    return _pp_token(pp_token::type::pp_number,
+		     tok1.get_value() + tok2.get_value(),
+		     invocation_range, std::move(eh));
+  }
+
+  if (tok1.get_type() != tok2.get_type()) {
+    code_remark remark
+      (code_remark::severity::fatal,
+       "can't concatenate tokens of different type",
+       preprocessor._raw_pp_tokens_range_to_source(invocation_range),
+       preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range));
+    remarks.add(remark);
+    throw pp_except(remark);
+  } else if(tok1.get_type() == pp_token::type::chr ||
+	    tok1.get_type() == pp_token::type::wchr) {
+    code_remark remark
+      (code_remark::severity::fatal,
+       "can't concatenate character constants",
+       preprocessor._raw_pp_tokens_range_to_source(invocation_range),
+       preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range));
+    remarks.add(remark);
+    throw pp_except(remark);
+  } else if (tok1.get_type() == pp_token::type::non_ws_char) {
+    code_remark remark
+      (code_remark::severity::fatal,
+       "can't concatenate " + tok1.get_value() + " and " + tok2.get_value(),
+       preprocessor._raw_pp_tokens_range_to_source(invocation_range),
+       preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range));
+    remarks.add(remark);
+    throw pp_except(remark);
+  }
+
+  std::string value = tok1.get_value() + tok2.get_value();
+  if (tok1.get_type() == pp_token::type::punctuator) {
+    if (value != "->" && value != "++" && value != "--" && value != "<<" &&
+	value != ">>" && value != "<=" && value != ">=" && value != "==" &&
+	value != "!=" && value != "&&" && value != "||" && value != "*=" &&
+	value != "/=" && value != "%=" && value != "+=" && value != "-=" &&
+	value != "<<=" && value != ">>=" && value != "&=" &&
+	value != "^=" && value != "|=" && value != "##" && value != "<:" &&
+	value != ":>" && value != "<%" && value != "%>" && value != "%:" &&
+	value != "%:%:") {
+      code_remark remark
+	(code_remark::severity::fatal,
+	 "can't concatenate " + tok1.get_value() + " and " + tok2.get_value(),
+	 preprocessor._raw_pp_tokens_range_to_source(invocation_range),
+	 preprocessor._raw_pp_tokens_range_to_range_in_file(invocation_range));
+      remarks.add(remark);
+      throw pp_except(remark);
+    }
+  }
+
+  return _pp_token(tok1.get_type(), std::move(value),
+		   invocation_range, std::move(eh));
 }
 
 
