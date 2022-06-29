@@ -102,6 +102,7 @@ namespace klp
       {
 	normal,
 	no_file_crossing,
+	peek,
       };
 
       _pp_token _read_next_plain_token(const _read_ctl ctl);
@@ -209,6 +210,10 @@ namespace klp
       bool _line_empty;
       bool _eof;
       raw_pp_token_index _eof_index;
+      raw_pp_token_index _peeked_begin;
+      static constexpr raw_pp_token_index _none_peeked =
+	std::numeric_limits<raw_pp_token_index>::max();
+      bool _peeked_maybe_pp_directive;
    };
   }
 }

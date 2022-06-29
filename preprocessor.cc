@@ -227,7 +227,7 @@ struct preprocessor::_expansion_state
     expanded_tokens_type::size_type next_token;
   };
 
-  std::stack<stack_entry> expansion_stack;
+  std::vector<stack_entry> expansion_stack;
   std::queue<_pp_token> pending_tokens;
 };
 
@@ -242,7 +242,8 @@ preprocessor::preprocessor(const header_resolver &header_resolver,
     _root_expansion_state(new _expansion_state{}),
     _cur_macro_invocation(nullptr), __counter__(0),
     _maybe_pp_directive(true), _line_empty(true),
-    _eof(false), _eof_index(std::numeric_limits<raw_pp_token_index>::max())
+    _eof(false), _eof_index(std::numeric_limits<raw_pp_token_index>::max()),
+    _peeked_begin(_none_peeked)
 {
   // Populate the special builtin macros.
   for (const auto &name : { "__FILE__",
@@ -721,51 +722,105 @@ _read_next_plain_token(const _read_ctl ctl)
     _inclusions.emplace(std::ref(*_cur_header_inclusion_root));
   }
 
-  try {
-    auto raw_tok = _tokenizers.top().read_next_token();
-    _grab_remarks_from(_tokenizers.top());
+  if (ctl == _read_ctl::peek && _peeked_begin == _none_peeked) {
+    // First in a series of peek requests. Setup everything so that
+    // the peeked tokens can later get replayed in regular,
+    // non-peeking mode.
+    _peeked_begin = _pp_result->get_raw_tokens().size();
+    _peeked_maybe_pp_directive = _maybe_pp_directive;
+  }
 
-    if (raw_tok.is_eof()) {
-      _handle_eof_from_tokenizer(raw_tok);
-      _maybe_pp_directive = true;
+  if (_peeked_begin != _none_peeked && ctl != _read_ctl::peek &&
+      _peeked_begin == _pp_result->get_raw_tokens().size()) {
+    // All previously peeked tokens have been replayed and the peek
+    // series had been terminated by an EOF from the tokenizer, which
+    // doesn't get recorded. Read it again below, this time for real.
+    _peeked_begin = _none_peeked;
+  }
 
-      if (!_eof && ctl == _read_ctl::no_file_crossing) {
-	const raw_pp_token_index eof_index
-	  = _pp_result->_get_last_raw_index() + 1;
-	return _pp_token{pp_token::type::eof, std::string{""},
-			 raw_pp_tokens_range{eof_index, eof_index}};
+  auto raw_tok = [&]() -> const raw_pp_token * {
+    if (_peeked_begin == _none_peeked || ctl == _read_ctl::peek) {
+      try {
+	auto tok = _tokenizers.top().read_next_token();
+
+	_grab_remarks_from(_tokenizers.top());
+
+	if (tok.is_eof()) {
+	  if (ctl != _read_ctl::peek)
+	    _handle_eof_from_tokenizer(tok);
+
+	  return nullptr;
+	}
+
+	_pp_result->_append_token(std::move(tok));
+	return &_pp_result->get_raw_tokens().back();
+
+      } catch (const pp_except&) {
+	_grab_remarks_from(_tokenizers.top());
+	throw;
       }
 
-      goto again;
+    } else {
+      const raw_pp_token *peeked_tok =
+	&_pp_result->get_raw_tokens()[_peeked_begin];
+      if (++_peeked_begin == _pp_result->get_raw_tokens().size())
+	_peeked_begin = _none_peeked;
+      _maybe_pp_directive = _peeked_maybe_pp_directive;
+      return peeked_tok;
+
+    }
+  }();
+
+  if (!raw_tok) {
+    _maybe_pp_directive = true;
+
+    if (!_eof && ctl != _read_ctl::normal) {
+      const raw_pp_token_index eof_index
+	= _pp_result->_get_last_raw_index() + 1;
+      return _pp_token{pp_token::type::eof, std::string{""},
+		       raw_pp_tokens_range{eof_index, eof_index}};
     }
 
-    std::string tok_value{raw_tok.get_value()};
-    const pp_token::type tok_type = raw_tok.get_type();
-    const bool is_pp_directive =
-      _maybe_pp_directive && raw_tok.is_punctuator("#");
-    _pp_result->_append_token(std::move(raw_tok));
-
-    if (raw_tok.is_newline()) {
-      _maybe_pp_directive = true;
-    } else if (is_pp_directive) {
-      _handle_pp_directive();
-      goto again;
-    } else if (!raw_tok.is_ws()) {
-      _maybe_pp_directive = false;
-    }
-
-    if (_cond_incl_inactive())
-      goto again;
-
-    const raw_pp_token_index raw_token_index =
-      _pp_result->_get_last_raw_index();
-    return _pp_token{tok_type, std::move(tok_value),
-		     raw_pp_tokens_range{raw_token_index},
-		     raw_token_index};
-  } catch (const pp_except&) {
-    _grab_remarks_from(_tokenizers.top());
-    throw;
+    goto again;
   }
+
+  const bool is_pp_directive =
+    _maybe_pp_directive && raw_tok->is_punctuator("#");
+  if (raw_tok->is_newline()) {
+    _maybe_pp_directive = true;
+
+  } else if (is_pp_directive) {
+    // In peek mode, crossing preprocessor directives is not allowed.
+    if (ctl == _read_ctl::peek) {
+      const raw_pp_token_index eof_index
+	= _pp_result->_get_last_raw_index();
+      return _pp_token{pp_token::type::eof, std::string{""},
+		       raw_pp_tokens_range{eof_index, eof_index}};
+    }
+
+    _handle_pp_directive();
+    goto again;
+
+  } else if (!raw_tok->is_ws()) {
+    _maybe_pp_directive = false;
+
+  }
+
+  if (ctl != _read_ctl::peek) {
+    // If in the course of replaying some previously peeked tokens,
+    // _peeked_maybe_pp_directive must be updated. Otherwise there's
+    // no harm in doing so.
+    _peeked_maybe_pp_directive = _maybe_pp_directive;
+  }
+
+  if (_cond_incl_inactive())
+    goto again;
+
+  const raw_pp_token_index raw_token_index =
+    raw_tok - &_pp_result->get_raw_tokens()[0];
+  return _pp_token{raw_tok->get_type(), raw_tok->get_value(),
+		   raw_pp_tokens_range{raw_token_index},
+		   raw_token_index};
 }
 
 void preprocessor::_handle_eof_from_tokenizer(const raw_pp_token &eof_tok)
@@ -1197,26 +1252,52 @@ _expand(_expansion_state &state,
   bool raw_tokens_read = false;
   bool keep_cur_macro_invocation = false;
 
+  bool peeking = false;
+  std::reverse_iterator<
+	std::vector<_expansion_state::stack_entry>::const_iterator
+    > it_peeking_stack_entry;
+  std::vector<_pp_token>::size_type peeking_token_index;
   auto read_tok = [&](const _read_ctl ctl) {
-    while (!state.expansion_stack.empty()) {
-      _expansion_state::stack_entry &top = state.expansion_stack.top();
-      if (top.next_token == top.tokens.size()) {
-	state.expansion_stack.pop();
-	assert(_cur_macro_invocation);
-	// During macro argument parsing, we can have state !=
-	// _root_expansion_state, but _root_expansion_state still
-	// being empty.
-	if (state_is_root &&
-	    _root_expansion_state->expansion_stack.empty() &&
-	    !keep_cur_macro_invocation) {
-	  _cur_macro_invocation = nullptr;
+    if (ctl != _read_ctl::peek) {
+      peeking = false;
+
+      while (!state.expansion_stack.empty()) {
+	_expansion_state::stack_entry &top = state.expansion_stack.back();
+	if (top.next_token == top.tokens.size()) {
+	  state.expansion_stack.pop_back();
+	  assert(_cur_macro_invocation);
+	  // During macro argument parsing, we can have state !=
+	  // _root_expansion_state, but _root_expansion_state still
+	  // being empty.
+	  if (state_is_root &&
+	      _root_expansion_state->expansion_stack.empty() &&
+	      !keep_cur_macro_invocation) {
+	    _cur_macro_invocation = nullptr;
+	  }
+	  continue;
 	}
-	continue;
+
+	_pp_token tok = top.tokens[top.next_token++];
+	return tok;
+      }
+    } else {
+      if (!peeking) {
+	// Beginning to peek, do the one-time setup.
+	peeking = true;
+	it_peeking_stack_entry = state.expansion_stack.rbegin();
+	if (!state.expansion_stack.empty())
+	  peeking_token_index = it_peeking_stack_entry->next_token;
       }
 
-      _pp_token tok = top.tokens[top.next_token++];
+      while (it_peeking_stack_entry != state.expansion_stack.rend() &&
+	     peeking_token_index == it_peeking_stack_entry->tokens.size() &&
+	     ++it_peeking_stack_entry != state.expansion_stack.rend()) {
+	peeking_token_index = it_peeking_stack_entry->next_token;
+      }
 
-      return tok;
+      if (it_peeking_stack_entry != state.expansion_stack.rend())
+	return it_peeking_stack_entry->tokens[peeking_token_index++];
+
     }
 
     raw_tokens_read = state_is_root;
@@ -1246,7 +1327,7 @@ _expand(_expansion_state &state,
 	  _cur_macro_invocation =
 	    &_pp_result->_add_macro_invocation(m->second, tok_range);
 	}
-	state.expansion_stack.emplace(
+	state.expansion_stack.emplace_back(
 		_handle_object_macro_invocation(m->second, std::move(tok)));
 	goto read_next;
       } else {
@@ -1286,7 +1367,7 @@ _expand(_expansion_state &state,
 	  }
 
 	  keep_cur_macro_invocation = true;
-	  state.expansion_stack.emplace(_handle_func_macro_invocation(
+	  state.expansion_stack.emplace_back(_handle_func_macro_invocation(
 			m->second,
 			tok.get_token_source().begin,
 			std::bind(read_tok, _read_ctl::no_file_crossing),
@@ -1669,11 +1750,23 @@ _create_macro_arg(const std::function<_pp_token()> &token_reader,
 
   if (expand) {
     _pp_tokens::const_iterator it_raw_tok = arg.cbegin();
-    auto read_arg_tok = [&](const _read_ctl) {
+    _pp_tokens::const_iterator it_peeked_raw_tok = arg.cend();
+    auto read_arg_tok = [&](const _read_ctl ctl) {
+      if (it_peeked_raw_tok != arg.cend() && ctl != _read_ctl::peek) {
+	const auto &tok = *it_peeked_raw_tok;
+	if (++it_peeked_raw_tok == it_raw_tok)
+	  it_peeked_raw_tok = arg.cend();
+
+	return tok;
+      }
+
       if (it_raw_tok == arg.cend()) {
 	return _pp_token(pp_token::type::eof, std::string(),
 			 end_delim.get_token_source());
       }
+
+      if (ctl == _read_ctl::peek && it_peeked_raw_tok == arg.cend())
+	it_peeked_raw_tok = it_raw_tok;
 
       return *it_raw_tok++;
     };
@@ -1742,13 +1835,32 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
   } else {
     // Run a macro expansion. Temporarily append the expanded pp_token
     // instances to _pp_result and drop them afterwards again.
-    auto read_tok = [&](const _read_ctl) {
+    auto it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
+    auto read_tok = [&](const _read_ctl ctl) {
+      if (it_peeked_raw_tok != _pp_result->get_raw_tokens().cend() &&
+	  ctl != _read_ctl::peek) {
+	const raw_pp_token_index tok_index =
+	  it_peeked_raw_tok- _pp_result->get_raw_tokens().cbegin();
+	_pp_token tok{it_peeked_raw_tok->get_type(),
+		      it_peeked_raw_tok->get_value(),
+		      raw_pp_tokens_range{tok_index}};
+
+	if (++it_peeked_raw_tok == it_raw_tok)
+	  it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
+
+	return tok;
+      }
+
       const raw_pp_token_index tok_index =
 	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
       if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
 	return _pp_token(pp_token::type::eof, std::string(),
 			 raw_pp_tokens_range{tok_index, tok_index});
       }
+
+      if (ctl == _read_ctl::peek &&
+	  it_peeked_raw_tok == _pp_result->get_raw_tokens().cend())
+	it_peeked_raw_tok = it_raw_tok;
 
       _pp_token tok{it_raw_tok->get_type(), it_raw_tok->get_value(),
 		    raw_pp_tokens_range{tok_index}};
@@ -1940,14 +2052,33 @@ _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
   // condition to _pp_result. They'll get purged again when we're done
   // with them.
   _fixup_inclusion_node_ranges();
+  auto it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
   auto read_tok =
-    [&](const _read_ctl) {
+    [&](const _read_ctl ctl) {
+      if (it_peeked_raw_tok != _pp_result->get_raw_tokens().cend() &&
+	  ctl != _read_ctl::peek) {
+	const raw_pp_token_index tok_index =
+	  it_peeked_raw_tok- _pp_result->get_raw_tokens().cbegin();
+	_pp_token tok{it_peeked_raw_tok->get_type(),
+		      it_peeked_raw_tok->get_value(),
+		      raw_pp_tokens_range{tok_index}};
+
+	if (++it_peeked_raw_tok == it_raw_tok)
+	  it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
+
+	return tok;
+      }
+
       const raw_pp_token_index tok_index =
 	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
       if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
 	return _pp_token(pp_token::type::eof, std::string(),
 			 raw_pp_tokens_range{tok_index, tok_index});
       }
+
+      if (ctl == _read_ctl::peek &&
+	  it_peeked_raw_tok == _pp_result->get_raw_tokens().cend())
+	it_peeked_raw_tok = it_raw_tok;
 
       _pp_token tok{it_raw_tok->get_type(), it_raw_tok->get_value(),
 		    raw_pp_tokens_range{tok_index}};
