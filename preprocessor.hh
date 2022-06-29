@@ -127,7 +127,7 @@ namespace klp
       range_in_file _pp_token_to_range_in_file(const _pp_token &tok)
 	const noexcept;
 
-      void _handle_pp_directive();
+      void _handle_pp_directive(const _read_ctl ctl);
 
       _pp_token
       _expand(_expansion_state &state,

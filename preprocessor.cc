@@ -798,7 +798,7 @@ _read_next_plain_token(const _read_ctl ctl)
 		       raw_pp_tokens_range{eof_index, eof_index}};
     }
 
-    _handle_pp_directive();
+    _handle_pp_directive(ctl);
     goto again;
 
   } else if (!raw_tok->is_ws()) {
@@ -941,7 +941,7 @@ range_in_file preprocessor::_pp_token_to_range_in_file(const _pp_token &tok)
   return _raw_pp_tokens_range_to_range_in_file(tok.get_token_source());
 }
 
-void preprocessor::_handle_pp_directive()
+void preprocessor::_handle_pp_directive(const _read_ctl ctl)
 {
   const raw_pp_token_index raw_begin = _pp_result->_get_last_raw_index();
   raw_pp_token_index raw_end = raw_begin + 1;
@@ -1238,6 +1238,15 @@ void preprocessor::_handle_pp_directive()
     }
 
   } else if (it_tok->get_value() == "include") {
+    if (ctl == _read_ctl::no_file_crossing) {
+      code_remark remark(code_remark::severity::fatal,
+			 "#include directive in macro invocation",
+			 _raw_tok_it_to_source(it_tok),
+			 it_tok->get_range_in_file());
+      _remarks.add(remark);
+      throw pp_except(remark);
+    }
+
     _handle_include(raw_pp_tokens_range{raw_begin, raw_end});
 
   }
@@ -1867,15 +1876,6 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
       ++it_raw_tok;
       return tok;
     };
-
-    if (_cur_macro_invocation) {
-      code_remark remark(code_remark::severity::fatal,
-			 "#include directive in macro invocation",
-			 _raw_tok_it_to_source(it_raw_tok),
-			 raw_it_to_range_in_file(it_raw_tok));
-      _remarks.add(remark);
-      throw pp_except(remark);
-    }
 
     assert(_root_expansion_state->expansion_stack.empty());
     assert(_root_expansion_state->pending_tokens.empty());
