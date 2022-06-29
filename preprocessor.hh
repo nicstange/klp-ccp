@@ -145,9 +145,9 @@ namespace klp
 			const std::function<_pp_token()> &token_reader,
 			const bool *update_cur_macro_invocation_range);
 
-      std::tuple<_pp_tokens, _pp_tokens, _pp_token>
-      _create_macro_arg(const std::function<_pp_token()> &token_reader,
-			const bool expand, const bool variadic);
+      std::pair<_pp_tokens, _pp_token>
+      _read_macro_arg(const std::function<_pp_token()> &token_reader,
+		      const bool variadic);
 
       void _handle_include(const raw_pp_tokens_range &directive_range);
 
