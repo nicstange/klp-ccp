@@ -1441,21 +1441,22 @@ _expand(_expansion_state &state,
       std::pair<_pp_tokens, _pp_token> arg =
 	[&]() {
 	  if (tok.is_punctuator("(")) {
-	    std::pair<_pp_tokens, _pp_token> arg =
+	    auto arg =
 	      _read_macro_arg(std::bind(read_tok,
 					_read_ctl::no_file_crossing),
 			      false);
-	    const char arg_delim = arg.second.get_value()[0];
+	    const char arg_delim = std::get<1>(arg).get_value()[0];
 	    if (arg_delim == ',') {
 	      code_remark remark(code_remark::severity::fatal,
 				 "too many arguments to \"defined\" operator",
-				 _pp_token_to_source(arg.second),
-				 _pp_token_to_range_in_file(arg.second));
+				 _pp_token_to_source(std::get<1>(arg)),
+				 _pp_token_to_range_in_file(std::get<1>(arg)));
 	      _remarks.add(remark);
 	      throw pp_except(remark);
 	    }
 	    assert(arg_delim == ')');
-	    return arg;
+	    return std::make_pair(std::move(std::get<0>(arg)),
+				  std::move(std::get<1>(arg)));
 
 	  } else {
 	    // 'defined FOO' form of the defined operator
@@ -1599,14 +1600,13 @@ preprocessor::_handle_func_macro_invocation(
     size_t i_arg;
     for (i_arg = 0; i_arg < macro.non_va_arg_count() && last_delim != ')';
 	 ++i_arg) {
-      std::pair<_pp_tokens, _pp_token> cur_arg
-	= _read_macro_arg(token_reader, false);
-      args.push_back(std::move(cur_arg.first));
-      assert(cur_arg.second.get_type() == pp_token::type::punctuator);
-      assert(cur_arg.second.get_value().size() == 1);
-      last_delim = cur_arg.second.get_value()[0];
+      auto cur_arg = _read_macro_arg(token_reader, false);
+      args.push_back(std::move(std::get<0>(cur_arg)));
+      assert(std::get<1>(cur_arg).get_type() == pp_token::type::punctuator);
+      assert(std::get<1>(cur_arg).get_value().size() == 1);
+      last_delim = std::get<1>(cur_arg).get_value()[0];
       assert(last_delim == ',' || last_delim == ')');
-      invocation_end = cur_arg.second.get_token_source().end;
+      invocation_end = std::get<1>(cur_arg).get_token_source().end;
     }
 
     if (last_delim == ')' && i_arg < macro.non_va_arg_count()) {
@@ -1635,14 +1635,13 @@ preprocessor::_handle_func_macro_invocation(
 
     if (macro.is_variadic()) {
       if (last_delim != ')') {
-	std::pair<_pp_tokens, _pp_token> cur_arg
-	  = _read_macro_arg(token_reader, true);
-	args.push_back(std::move(cur_arg.first));
-	assert(cur_arg.second.get_type() == pp_token::type::punctuator);
-	assert(cur_arg.second.get_value().size() == 1);
-	last_delim = cur_arg.second.get_value()[0];
+	auto cur_arg = _read_macro_arg(token_reader, true);
+	args.push_back(std::move(std::get<0>(cur_arg)));
+	assert(std::get<1>(cur_arg).get_type() == pp_token::type::punctuator);
+	assert(std::get<1>(cur_arg).get_value().size() == 1);
+	last_delim = std::get<1>(cur_arg).get_value()[0];
 	assert(last_delim == ')');
-	invocation_end = cur_arg.second.get_token_source().end;
+	invocation_end = std::get<1>(cur_arg).get_token_source().end;
 
       } else {
 	// The variadic argument might simply has been left out, i.e.
@@ -1697,27 +1696,26 @@ preprocessor::_handle_func_macro_invocation(
 
   } else {
     // Slurp in the tokens between the () and make sure they're all empties.
-    std::pair<_pp_tokens, _pp_token> dummy_arg
-      = _read_macro_arg(token_reader, false);
-    assert(dummy_arg.second.get_type() == pp_token::type::punctuator);
+    auto dummy_arg = _read_macro_arg(token_reader, false);
+    assert(std::get<1>(dummy_arg).get_type() == pp_token::type::punctuator);
     bool non_empty_found = false;
-    for (auto tok : dummy_arg.first) {
+    for (auto tok : std::get<0>(dummy_arg)) {
       if (!tok.is_empty() && !tok.is_ws()) {
 	non_empty_found = true;
 	break;
       }
     }
-    if (non_empty_found || dummy_arg.second.get_value() != ")") {
+    if (non_empty_found || std::get<1>(dummy_arg).get_value() != ")") {
       code_remark remark
 	(code_remark::severity::fatal,
 	 "too many parameters in macro invocation",
-	 _pp_token_to_source(dummy_arg.second),
-	 _pp_token_to_range_in_file(dummy_arg.second));
+	 _pp_token_to_source(std::get<1>(dummy_arg)),
+	 _pp_token_to_range_in_file(std::get<1>(dummy_arg)));
       _remarks.add(remark);
       throw pp_except(remark);
     }
 
-    invocation_end = dummy_arg.second.get_token_source().end;
+    invocation_end = std::get<1>(dummy_arg).get_token_source().end;
   }
 
   if (*update_cur_macro_invocation_range) {
@@ -1732,11 +1730,14 @@ preprocessor::_handle_func_macro_invocation(
 				 _remarks);
 }
 
-std::pair<preprocessor::_pp_tokens, preprocessor::_pp_token>
+std::tuple<preprocessor::_pp_tokens, preprocessor::_pp_token,
+	   std::size_t, std::size_t>
 preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
 			      const bool variadic)
 {
   _pp_tokens arg;
+  std::size_t offset = 0;
+  std::size_t n_read = 0;
   std::size_t lparens = 0;
   _pp_token end_delim(pp_token::type::eof, std::string(),
 		      raw_pp_tokens_range());
@@ -1746,6 +1747,7 @@ preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
 
   while (true) {
     _pp_token tok = token_reader();
+    n_read++;
 
     if (tok.is_eof()) {
       code_remark remark
@@ -1756,22 +1758,23 @@ preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
       throw pp_except(remark);
     }
 
-    if (tok.is_empty())
-      continue;
+    if (tok.is_empty() || tok.is_newline() || tok.is_ws()) {
+      if (arg.empty())
+	offset++;
 
     // Turn all newlines into whitespace.
-    if (tok.is_newline())
-      tok.set_type_and_value(pp_token::type::ws, " ");
-
-    if (tok.is_ws()) {
-      if (last_was_ws) // Skip multiple consecutive whitespace tokens.
-	continue;
-
-      // Normalize multiple whitespaces into a single one.
-      if (tok.get_value().size() > 1)
+      if (tok.is_newline())
 	tok.set_type_and_value(pp_token::type::ws, " ");
-      pending_ws = std::move(tok);
-      last_was_ws = true;
+
+      // Skip multiple consecutive whitespace tokens.
+      if (tok.is_ws() && !last_was_ws) {
+	// Normalize multiple whitespaces into a single one.
+	if (tok.get_value().size() > 1)
+	  tok.set_type_and_value(pp_token::type::ws, " ");
+	pending_ws = std::move(tok);
+	last_was_ws = true;
+      }
+
       continue;
     }
 
@@ -1794,7 +1797,8 @@ preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
     last_was_ws = false;
   }
 
-  return std::make_pair(std::move(arg), std::move(end_delim));
+  return std::make_tuple(std::move(arg), std::move(end_delim),
+			 offset, n_read - offset);
 }
 
 
