@@ -158,6 +158,11 @@ namespace klp
 		(const std::function<_pp_token(const _read_ctl)> &token_reader,
 		 const bool variadic);
 
+      _scanned_macro_invocation
+      _read_defined_operator_invocation
+		(const raw_pp_token_index invocation_begin,
+		 const std::function<_pp_token(const _read_ctl)> &token_reader);
+
       void _handle_include(const raw_pp_tokens_range &directive_range);
 
       void _push_cond_incl(const raw_pp_token_index range_begin);
