@@ -1369,8 +1369,7 @@ _expand(_expansion_state &state,
 	  state.expansion_stack.emplace_back(_handle_func_macro_invocation(
 			m->second,
 			tok.get_token_source().begin,
-			std::bind(read_tok, _read_ctl::no_file_crossing),
-			&raw_tokens_read));
+			read_tok, &raw_tokens_read));
 	  keep_cur_macro_invocation = false;
 	  goto read_next;
 	}
@@ -1419,10 +1418,7 @@ _expand(_expansion_state &state,
       std::pair<_pp_tokens, _pp_token> arg =
 	[&]() {
 	  if (tok.is_punctuator("(")) {
-	    auto arg =
-	      _read_macro_arg(std::bind(read_tok,
-					_read_ctl::no_file_crossing),
-			      false);
+	    auto arg = _read_macro_arg(read_tok, false);
 	    const char arg_delim = std::get<1>(arg).get_value()[0];
 	    if (arg_delim == ',') {
 	      code_remark remark(code_remark::severity::fatal,
@@ -1572,7 +1568,7 @@ std::vector<preprocessor::_pp_token>
 preprocessor::_handle_func_macro_invocation(
 	const pp_result::macro &macro,
 	const raw_pp_token_index invocation_begin,
-	const std::function<_pp_token()> &token_reader,
+	const std::function<_pp_token(const _read_ctl)> &token_reader,
 	const bool *update_cur_macro_invocation_range)
 {
   _scanned_macro_invocation smi =
@@ -1640,7 +1636,7 @@ _read_func_macro_invocation
 	(const std::size_t non_va_arg_count,
 	 const bool is_variadic,
 	 const raw_pp_token_index invocation_begin,
-	 const std::function<_pp_token()> &token_reader)
+	 const std::function<_pp_token(const _read_ctl)> &token_reader)
 {
   _scanned_macro_invocation result;
 
@@ -1649,7 +1645,7 @@ _read_func_macro_invocation
   while (true) {
     result.n_tokens++;
 
-    const auto &tok = token_reader();
+    const auto &tok = token_reader(_read_ctl::no_file_crossing);
     if (tok.is_punctuator("("))
       break;
     assert(tok.is_ws() || tok.is_newline() || tok.is_empty());
@@ -1748,8 +1744,9 @@ _read_func_macro_invocation
 
 std::tuple<preprocessor::_pp_tokens, preprocessor::_pp_token,
 	   std::size_t, std::size_t>
-preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
-			      const bool variadic)
+preprocessor::
+_read_macro_arg(const std::function<_pp_token(const _read_ctl)> &token_reader,
+		const bool variadic)
 {
   _pp_tokens arg;
   std::size_t offset = 0;
@@ -1762,7 +1759,7 @@ preprocessor::_read_macro_arg(const std::function<_pp_token()> &token_reader,
   bool last_was_ws = true; // Strip leading whitespace.
 
   while (true) {
-    _pp_token tok = token_reader();
+    _pp_token tok = token_reader(_read_ctl::no_file_crossing);
     n_read++;
 
     if (tok.is_eof()) {

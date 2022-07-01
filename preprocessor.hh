@@ -141,21 +141,22 @@ namespace klp
 
       std::vector<_pp_token>
       _handle_func_macro_invocation(
-			const pp_result::macro &macro,
-			const raw_pp_token_index invocation_begin,
-			const std::function<_pp_token()> &token_reader,
-			const bool *update_cur_macro_invocation_range);
+		const pp_result::macro &macro,
+		const raw_pp_token_index invocation_begin,
+		const std::function<_pp_token(const _read_ctl)> &token_reader,
+		const bool *update_cur_macro_invocation_range);
 
       _scanned_macro_invocation
       _read_func_macro_invocation
 		(const std::size_t non_va_arg_count,
 		 const bool is_variadic,
 		 const raw_pp_token_index invocation_begin,
-		 const std::function<_pp_token()> &token_reader);
+		 const std::function<_pp_token(const _read_ctl)> &token_reader);
 
       std::tuple<_pp_tokens, _pp_token, std::size_t, std::size_t>
-      _read_macro_arg(const std::function<_pp_token()> &token_reader,
-		      const bool variadic);
+      _read_macro_arg
+		(const std::function<_pp_token(const _read_ctl)> &token_reader,
+		 const bool variadic);
 
       void _handle_include(const raw_pp_tokens_range &directive_range);
 
