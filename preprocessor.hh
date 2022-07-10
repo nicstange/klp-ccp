@@ -88,11 +88,10 @@ namespace klp
     private:
       class _macro_expander;
       class _scanned_macro_invocation;
-
+      class _macro_expansion_stack_entry;
       class _pp_token;
       typedef std::vector<_pp_token> _pp_tokens;
       struct _cond_incl_state;
-      struct _expansion_state;
 
       template<typename T>
       void _grab_remarks_from(T &from);
@@ -130,21 +129,12 @@ namespace klp
 
       void _handle_pp_directive(const _read_ctl ctl);
 
-      _pp_token
-      _expand(_expansion_state &state,
-	      const std::function<_pp_token(const _read_ctl)> &token_reader,
-	      const bool from_cond_incl_cond = false);
+      _pp_token _read_expanded();
 
-      std::vector<_pp_token>
-      _handle_object_macro_invocation(const pp_result::macro &macro,
-				      _pp_token &&id_tok);
-
-      std::vector<_pp_token>
-      _handle_func_macro_invocation(
-		const pp_result::macro &macro,
-		const raw_pp_token_index invocation_begin,
-		const std::function<_pp_token(const _read_ctl)> &token_reader,
-		const bool *update_cur_macro_invocation_range);
+      std::pair<bool, std::vector<_pp_token>>
+      _try_expand(const raw_pp_token_index id_tok_index,
+		  const std::function<_pp_token(const _read_ctl)> &tok_reader,
+		  const bool from_cond_incl_cond);
 
       _scanned_macro_invocation
       _read_func_macro_invocation
@@ -210,15 +200,13 @@ namespace klp
       std::size_t _cond_incl_nesting;
 
       std::stack<pp_tokenizer> _tokenizers;
-      std::unique_ptr<_expansion_state> _root_expansion_state;
       std::map<std::string,
 	       std::reference_wrapper<const pp_result::macro> > _macros;
-
-      pp_result::macro_invocation *_cur_macro_invocation;
 
       code_remarks _remarks;
 
       std::size_t __counter__;
+      std::queue<_pp_token> _expanded_tokens;
       std::queue<_pp_token> _pending_tokens;
       bool _maybe_pp_directive;
       bool _line_empty;

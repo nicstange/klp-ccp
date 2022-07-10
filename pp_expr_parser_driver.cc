@@ -123,23 +123,23 @@ pp_expr_parser_driver::lex(pp_expr_parser::semantic_type *value,
 			   pp_expr_parser::location_type *loc)
 {
   pp_tokens &tokens = _pp_result.get_pp_tokens();
-  pp_token_index last_index;
+  pp_token_index tok_index;
   do {
     try {
-      last_index = _token_reader();
+      tok_index = _token_reader();
     } catch (const pp_except&) {
       throw;
     }
-  } while (tokens.back().is_type_any_of<pp_token::type::ws,
-					pp_token::type::empty,
-					pp_token::type::newline>() ||
-	   (tokens.back().is_id() &&
-	    tokens.back().get_value() == "__extension__"));
+  } while (tokens[tok_index].is_type_any_of<pp_token::type::ws,
+					    pp_token::type::empty,
+					    pp_token::type::newline>() ||
+	   (tokens[tok_index].is_id() &&
+	    tokens[tok_index].get_value() == "__extension__"));
 
-  loc->end = last_index + 1;
-  loc->begin = last_index;
+  loc->end = tok_index + 1;
+  loc->begin = tok_index;
 
-  pp_token &tok = tokens.back();
+  pp_token &tok = tokens[tok_index];
   if (tok.is_eof()) {
     return static_cast<pp_expr_parser::token_type>(0);
   }

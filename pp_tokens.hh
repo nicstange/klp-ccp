@@ -114,6 +114,9 @@ namespace klp
       const pp_token& operator[](const _pp_tokens_type::size_type i) const
       { return _tokens[i]; }
 
+      pp_token& operator[](const _pp_tokens_type::size_type i)
+      { return _tokens[i]; }
+
       std::string stringify(const bool as_string) const;
 
       void shrink(const size_type new_size);
