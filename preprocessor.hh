@@ -86,7 +86,6 @@ namespace klp
 	 const std::function<void(const std::string)> &report_warning);
 
     private:
-      class _macro_expander;
       class _scanned_macro_invocation;
       class _macro_expansion_stack_entry;
       class _pp_token;
@@ -152,6 +151,22 @@ namespace klp
       _read_defined_operator_invocation
 		(const raw_pp_token_index invocation_begin,
 		 const std::function<_pp_token(const _read_ctl)> &token_reader);
+
+      std::vector<_pp_token>
+      _expand_one(const pp_result::macro &m,
+		  pp_result::macro_invocation &mi,
+		  std::vector<_pp_tokens> &&args,
+		  std::vector<_pp_tokens> &&exp_args,
+		  const raw_pp_tokens_range &invocation_range);
+
+      std::vector<_pp_token>
+      _expand_one_builtin_special(const pp_result::macro &macro,
+				  const raw_pp_token_index id_tok);
+
+      static std::string _stringify(const std::vector<_pp_token> &arg_toks);
+
+      _pp_token _concat(_pp_token &&tok1, _pp_token &&tok2,
+			const raw_pp_tokens_range &invocation);
 
       void _handle_include(const raw_pp_tokens_range &directive_range);
 
