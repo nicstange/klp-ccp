@@ -1728,9 +1728,15 @@ _read_macro_arg(const std::function<_pp_token(const _read_ctl)> &token_reader,
   std::size_t lparens = 0;
   _pp_token end_delim(pp_token::type::eof, std::string(),
 		      raw_pp_tokens_range());
-  _pp_token pending_ws (pp_token::type::eof, std::string(),
-			raw_pp_tokens_range());
-  bool last_was_ws = true; // Strip leading whitespace.
+  bool last_was_ws = false;
+  bool in_trailing_ws = false;
+
+  auto &&is_end_delim_tok =
+    [&](const _pp_token &tok) {
+      return (!lparens &&
+	      ((!variadic && tok.is_punctuator(",")) ||
+	       tok.is_punctuator(")")));
+    };
 
   while (true) {
     _pp_token tok = token_reader(_read_ctl::no_file_crossing);
@@ -1743,45 +1749,60 @@ _read_macro_arg(const std::function<_pp_token(const _read_ctl)> &token_reader,
 	 _pp_token_to_source(tok), _pp_token_to_range_in_file(tok));
       _remarks.add(remark);
       throw pp_except(remark);
-    }
 
-    if (tok.is_empty() || tok.is_newline() || tok.is_ws()) {
-      if (arg.empty())
+    } else if (tok.is_empty() || tok.is_newline() || tok.is_ws()) {
+      if (arg.empty()) {
 	offset++;
+	continue; // Skip whitespace at the beginning.
+      }
 
-    // Turn all newlines into whitespace.
+      // For the first in a sequence of whitespace tokens, Peek ahead
+      // to check whether there's some subsequent non-whitespace
+      // token. Otherwise strip trailing whitespace.
+      bool is_trailing_ws = in_trailing_ws;
+      if (!in_trailing_ws && !last_was_ws) {
+	is_trailing_ws = true;
+	while (is_trailing_ws) {
+	  const auto &peeked_tok = token_reader(_read_ctl::peek);
+
+	  if (peeked_tok.is_eof() || is_end_delim_tok(peeked_tok)) {
+	    break;
+	  } else if (!peeked_tok.is_empty() && !peeked_tok.is_newline() &&
+		     !peeked_tok.is_ws()) {
+	    is_trailing_ws = false;
+	  }
+	}
+      }
+
+      last_was_ws = true;
+      if (is_trailing_ws) {
+	in_trailing_ws = true;
+	continue;
+      }
+
+      // Turn newlines into whitespace
       if (tok.is_newline())
 	tok.set_type_and_value(pp_token::type::ws, " ");
 
-      // Skip multiple consecutive whitespace tokens.
-      if (tok.is_ws() && !last_was_ws) {
-	// Normalize multiple whitespaces into a single one.
-	if (tok.get_value().size() > 1)
-	  tok.set_type_and_value(pp_token::type::ws, " ");
-	pending_ws = std::move(tok);
-	last_was_ws = true;
-      }
-
-      continue;
-    }
-
-    if (!lparens &&
-	((!variadic && tok.is_punctuator(",")) || tok.is_punctuator(")"))) {
+    } else if (is_end_delim_tok(tok)) {
       // End of macro argument. Skip queued whitespace.
       end_delim = std::move(tok);
       break;
+
+    } else if (tok.is_punctuator("(")) {
+      lparens++;
+      last_was_ws = false;
+
+    } else if (tok.is_punctuator(")")) {
+      lparens--;
+      last_was_ws = false;
+
+    } else {
+      last_was_ws = false;
+
     }
 
-    if (tok.is_punctuator("("))
-      lparens++;
-    else if (tok.is_punctuator(")"))
-      lparens--;
-
-    if (last_was_ws && pending_ws.is_ws())
-      arg.push_back(pending_ws);
-
     arg.push_back(tok);
-    last_was_ws = false;
   }
 
   return std::make_tuple(std::move(arg), std::move(end_delim),
@@ -1878,10 +1899,8 @@ _expand_one(const pp_result::macro &m,
   //
   // For the non-expanded argument values, which are used in
   // concatenations and stringifications, the associated _pp_tokens
-  // sequence must not contain any
-  // - empty token,
-  // - multiple consecutive whitespace tokens or
-  // - leading or trailing whitespace.
+  // sequence must not have any leading or trailing whitespace or
+  // empties.
   //
   const auto &repl_toks = m.get_repl();
 
@@ -2024,7 +2043,7 @@ _expand_one(const pp_result::macro &m,
 	      // concatenation, the rest gets emitted verbatim.
 	      for (auto it_arg_tok = arg->begin();
 		   it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
-		assert(!it_arg_tok->is_empty());
+		assert(!it_arg_tok->is_newline());
 		result.emplace_back(it_arg_tok->get_type(),
 				    it_arg_tok->get_value(),
 				    invocation_range,
@@ -2033,6 +2052,8 @@ _expand_one(const pp_result::macro &m,
 	      }
 	    }
 
+	    assert(!arg->back().is_empty() && !arg->back().is_ws() &&
+		   !arg->back().is_newline());
 	    concat_result.set_type_and_value(arg->back().get_type(),
 					     arg->back().get_value());
 	    concat_result.expansion_history() +=
@@ -2116,6 +2137,8 @@ _expand_one(const pp_result::macro &m,
 	    if (arg->empty())
 	      continue;
 
+	    assert(!arg->front().is_empty() && !arg->front().is_ws() &&
+		   !arg->front().is_newline());
 	    concat_result = _concat(std::move(concat_result),
 				    _pp_token{
 					arg->front().get_type(),
@@ -2143,7 +2166,7 @@ _expand_one(const pp_result::macro &m,
 	    result.emplace_back(std::move(concat_result));
 	    for (auto it_arg_tok = arg->begin() + 1;
 		 it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
-	      assert(!it_arg_tok->is_empty());
+	      assert(!it_arg_tok->is_newline());
 	      result.emplace_back(it_arg_tok->get_type(),
 				  it_arg_tok->get_value(),
 				  invocation_range,
@@ -2151,6 +2174,8 @@ _expand_one(const pp_result::macro &m,
 				  it_arg_tok->get_passed_through_raw_token());
 	    }
 
+	    assert(!arg->back().is_empty() && !arg->back().is_ws() &&
+		   !arg->back().is_newline());
 	    concat_result.set_type_and_value(arg->back().get_type(),
 					     arg->back().get_value());
 	    concat_result.expansion_history() +=
@@ -2204,6 +2229,7 @@ _expand_one(const pp_result::macro &m,
 	}
 
 	for (const auto &arg_tok : *arg) {
+	  assert(!arg_tok.is_newline());
 	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value(),
 			      invocation_range, arg_tok.expansion_history(),
 			      arg_tok.get_passed_through_raw_token());
@@ -2289,10 +2315,29 @@ _expand_one_builtin_special(const pp_result::macro &m,
 std::string preprocessor::
 _stringify(const std::vector<_pp_token> &arg_toks)
 {
+  assert(arg_toks.empty() ||
+	 !(arg_toks.front().is_ws() || arg_toks.front().is_empty() ||
+	   arg_toks.back().is_ws() || arg_toks.back().is_empty()));
+
   // Concatenate the stringified argument tokens
   std::string s;
-  for (auto &&it_tok = arg_toks.begin(); it_tok != arg_toks.end(); ++it_tok)
-    s += it_tok->stringify();
+  bool last_was_ws = false;
+  for (auto &&it_tok = arg_toks.begin(); it_tok != arg_toks.end(); ++it_tok) {
+    assert(!it_tok->is_newline());
+    if (it_tok->is_empty()) {
+      continue;
+    } else if (it_tok->is_ws()) {
+      // Multiple consecutive whitespace tokens get transformed into a single
+      // whitespace character.
+      if (!last_was_ws) {
+	s += ' ';
+	last_was_ws = true;
+      }
+    } else {
+      s += it_tok->stringify();
+      last_was_ws = false;
+    }
+  }
 
   // And escape '\' and '"' characters
   for (auto &&it = s.begin(); it != s.end();) {
