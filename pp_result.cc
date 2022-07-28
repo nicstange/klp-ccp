@@ -138,38 +138,81 @@ void pp_result::macro::_init_do_expand_args()
   // appears in the replacement list, ignoring operands of ## and
   // #. Determine those.
   std::set<std::string> do_expand;
-  bool in_concat = false;
-  for (auto it = _repl.cbegin(); it != _repl.cend();) {
-    if (it->is_id() &&
-	(std::find(_arg_names.cbegin(), _arg_names.cend(), it->get_value())
-	 != _arg_names.cend())) {
-      if (_is_concat_op(it + 1)) {
-	in_concat = true;
-	it += 2;
-      } else if (in_concat) {
-	in_concat = false;
-	it = _next_non_ws_repl(it + 1);
-      } else {
-	do_expand.insert(it->get_value());
-	it = _next_non_ws_repl(it + 1);
-      }
-    } else {
-      // Take care of the special
-      //  , ## __VA_ARGS__
-      // construct.
-      const bool is_comma = it->is_punctuator(",");
-      it = _skip_stringification_or_single(it);
-      if (_is_concat_op(it)) {
-	in_concat = true;
-	it = _next_non_ws_repl(it);
 
-	if (_variadic && is_comma && it->is_id() &&
-	    it->get_value() == _arg_names.back()) {
-	  in_concat = false;
-	}
-      } else {
-	in_concat = false;
+  auto &&is_stringification =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      return _func_like && it_repl->is_punctuator("#");
+    };
+
+  auto &&skip_ws =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      if (it_repl != _repl.cend() && it_repl->is_ws()) {
+	// No whitespace at beginning or end of replacement list.
+	assert(it_repl + 1 != _repl.cend());
+	// No multiple consecutive whitespace tokens in replacement
+	// list.
+	assert(!(it_repl + 1)->is_ws());
+	return it_repl + 1;
       }
+      return it_repl;
+    };
+
+  auto &&advance_it_repl =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      assert(it_repl != _repl.cend());
+      if (is_stringification(it_repl)) {
+	assert(skip_ws(it_repl + 1) != _repl.cend());
+	assert(skip_ws(it_repl + 1)->is_id());
+	return skip_ws(skip_ws(it_repl + 1) + 1);
+      }
+
+      return skip_ws(it_repl + 1);
+    };
+
+  auto &&is_vaargs =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      return (_variadic && it_repl->is_id() &&
+	      it_repl->get_value() == _arg_names.back());
+    };
+
+  for (raw_pp_tokens::const_iterator it = _repl.cbegin(), it_next_no_ws;
+       it != _repl.cend(); it = it_next_no_ws) {
+    it_next_no_ws = advance_it_repl(it);
+
+    if (it_next_no_ws != _repl.cend() && it_next_no_ws->is_punctuator("##")) {
+      do {
+	auto it_next_concat_tok = skip_ws(it_next_no_ws + 1);
+	assert(it_next_concat_tok != _repl.cend());
+
+	// Take care of the special
+	//  , ## __VA_ARGS__
+	// construct.
+	if (it->is_punctuator(",") && is_vaargs(it_next_concat_tok)) {
+	  const auto it_repl_lookahead = skip_ws(it_next_concat_tok + 1);
+
+	  if (it_repl_lookahead == _repl.cend() ||
+	      !it_repl_lookahead->is_punctuator("##")) {
+	    it_next_no_ws = it_next_concat_tok; // Continue at __VA_ARGS__
+	    break;
+	  }
+	}
+
+	it = it_next_concat_tok;
+	if (it->is_punctuator("##")) {
+	  // Multiple consecutive ## tokens.
+	  it_next_no_ws = it;
+	} else {
+	  it_next_no_ws = advance_it_repl(it);
+	}
+      } while (it_next_no_ws != _repl.cend() &&
+	       it_next_no_ws->is_punctuator("##"));
+
+    } else if (it->is_id()) {
+      if (std::find(_arg_names.cbegin(), _arg_names.cend(), it->get_value())
+	  != _arg_names.cend()) {
+	do_expand.insert(it->get_value());
+      }
+
     }
   }
 
@@ -178,39 +221,6 @@ void pp_result::macro::_init_do_expand_args()
     if (do_expand.count(_arg_names[i]))
       _do_expand_args[i] = true;
   }
-}
-
-raw_pp_tokens::const_iterator
-pp_result::macro::_next_non_ws_repl(const raw_pp_tokens::const_iterator it)
-  const noexcept
-{
-  if (it == _repl.end() || !it->is_ws()) {
-    return it;
-  }
-  // No need to loop here: we won't have more than one
-  // consecutive whitespace in a macro replacement list
-  assert(it + 1 == _repl.end() || !(it + 1)->is_ws());
-  return it + 1;
-}
-
-raw_pp_tokens::const_iterator pp_result::macro::
-_skip_stringification_or_single(const raw_pp_tokens::const_iterator &it)
-  const noexcept
-{
-  assert(it != _repl.end());
-
-  if (_func_like && it->is_punctuator("#")) {
-    assert(it + 1 != _repl.end());
-    assert((it + 1)->is_id());
-    return it + 2;
-  }
-  return it + 1;
-}
-
-bool pp_result::macro::_is_concat_op(const raw_pp_tokens::const_iterator &it)
-  const noexcept
-{
-  return (it != _repl.end() && it->is_punctuator("##"));
 }
 
 

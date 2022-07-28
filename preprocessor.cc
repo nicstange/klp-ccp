@@ -473,21 +473,19 @@ pp_token_index preprocessor::read_next_token()
 void preprocessor::register_builtin_macro(const std::string &name,
 					  const std::string &repl)
 {
-  const raw_pp_tokens tokenized_repl =
-    pp_string_tokenizer::tokenize_builtin(repl);
-  raw_pp_tokens normalized_repl =
-    _normalize_macro_repl(tokenized_repl.begin(), tokenized_repl.end(),
-			  false, std::vector<std::string>{},
-			  [](const std::string&,
-			     const raw_pp_tokens::const_iterator&)
+  raw_pp_tokens repl_toks = pp_string_tokenizer::tokenize_builtin(repl);
+
+  _check_macro_repl(repl_toks.begin(), repl_toks.end(),
+		    false, std::vector<std::string>{},
+		    [](const std::string&, const raw_pp_tokens::const_iterator&)
 				-> pp_except {
-			    assert(0);
-			    __builtin_unreachable();
-			  });
+		      assert(0);
+		      __builtin_unreachable();
+		    });
 
   const pp_result::macro &m =
     _pp_result->_add_macro(name, false, false, std::vector<std::string>{},
-			   pp_string_tokenizer::tokenize_builtin(repl),
+			   std::move(repl_toks),
 			   pp_result::macro::builtin_tag{});
   if (!_macros.insert(std::make_pair(m.get_name(), std::ref(m))).second)
     assert(0);
@@ -504,21 +502,19 @@ register_builtin_macro(const std::string &name,
   for (const auto a : arg_list)
     _arg_list.emplace_back(a);
 
-  const raw_pp_tokens tokenized_repl =
-    pp_string_tokenizer::tokenize_builtin(repl);
-  raw_pp_tokens normalized_repl =
-    _normalize_macro_repl(tokenized_repl.begin(), tokenized_repl.end(),
-			  true, _arg_list,
-			  [](const std::string&,
-			     const raw_pp_tokens::const_iterator&)
+  raw_pp_tokens repl_toks = pp_string_tokenizer::tokenize_builtin(repl);
+
+  _check_macro_repl(repl_toks.begin(), repl_toks.end(),
+		    true, _arg_list,
+		    [](const std::string&, const raw_pp_tokens::const_iterator&)
 				-> pp_except {
-			    assert(0);
-			    __builtin_unreachable();
-			  });
+		      assert(0);
+		      __builtin_unreachable();
+		    });
 
   const pp_result::macro &m =
     _pp_result->_add_macro(name, true, variadic, std::move(_arg_list),
-			   std::move(normalized_repl),
+			   std::move(repl_toks),
 			   pp_result::macro::builtin_tag{});
   if (!_macros.insert(std::make_pair(m.get_name(), std::ref(m))).second)
     assert(0);
@@ -588,18 +584,17 @@ void preprocessor::register_predefined_macro
     throw report_fatal("garbage after macro signature");
   }
 
-  raw_pp_tokens normalized_repl =
-    _normalize_macro_repl(skip_ws(repl_toks.cbegin(), repl_toks.cend()),
-			  repl_toks.cend(),
-			  func_like, arg_names,
-			  [&](const std::string &msg,
-			     const raw_pp_tokens::const_iterator&) {
-			    return report_fatal(msg);
-			  });
+  _check_macro_repl(skip_ws(repl_toks.cbegin(), repl_toks.cend()),
+		    repl_toks.cend(),
+		    func_like, arg_names,
+		    [&](const std::string &msg,
+			const raw_pp_tokens::const_iterator&) {
+		      return report_fatal(msg);
+		    });
 
   const pp_result::macro &m =
     _pp_result->_add_macro(name, func_like, variadic, std::move(arg_names),
-			   std::move(normalized_repl),
+			   std::move(repl_toks),
 			   pp_result::macro::predefined_user_tag{});
 
   const auto it_existing = _macros.find(name);
@@ -1895,13 +1890,26 @@ _expand_one(const pp_result::macro &m,
       return m.is_func_like() && it_repl->is_punctuator("#");
     };
 
+  auto &&skip_ws =
+    [&](const raw_pp_tokens::const_iterator &it_repl) {
+      if (it_repl != repl_toks.end() && it_repl->is_ws()) {
+	// No whitespace at beginning or end of replacement list.
+	assert(it_repl + 1 != repl_toks.end());
+	// No multiple consecutive whitespace tokens in replacement
+	// list.
+	assert(!(it_repl + 1)->is_ws());
+	return it_repl + 1;
+      }
+      return it_repl;
+    };
+
   auto &&advance_it_repl =
     [&](const raw_pp_tokens::const_iterator &it_repl) {
       assert(it_repl != repl_toks.end());
       if (is_stringification(it_repl)) {
-	assert(it_repl + 1 != repl_toks.end());
-	assert((it_repl + 1)->is_id());
-	return it_repl + 2;
+	assert(skip_ws(it_repl + 1) != repl_toks.end());
+	assert(skip_ws(it_repl + 1)->is_id());
+	return skip_ws(it_repl + 1) + 1;
       }
 
       return it_repl + 1;
@@ -1962,24 +1970,32 @@ _expand_one(const pp_result::macro &m,
   for (raw_pp_tokens::const_iterator it_repl = repl_toks.cbegin(), it_repl_next;
        it_repl != repl_toks.end(); it_repl = it_repl_next) {
     it_repl_next = advance_it_repl(it_repl);
+    auto it_repl_next_no_ws = skip_ws(it_repl_next);
+    assert(it_repl_next == repl_toks.end() ||
+	   it_repl_next_no_ws != repl_toks.end());
 
-    if (it_repl_next != repl_toks.end() && it_repl_next->is_punctuator("##")) {
-      assert(it_repl_next + 1 != repl_toks.end());
+    if (it_repl_next_no_ws != repl_toks.end() &&
+	it_repl_next_no_ws->is_punctuator("##")) {
+      auto it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
+      assert(it_repl_next_concat_tok != repl_toks.end());
 
       // Handle the GNU extension that in a sequence of
       //  , ## __VA_ARGS__
       // the comma gets removed if __VA_ARGS__ is empty.
-      if (it_repl->is_punctuator(",") && is_vaargs(it_repl_next + 1)
-	  && (it_repl_next + 2 == repl_toks.end() ||
-	      !(it_repl_next + 2)->is_punctuator("##"))) {
-	if (!args.back().empty()) {
-	  result.emplace_back(it_repl->get_type(), it_repl->get_value(),
-			      invocation_range);
-	  last_was_ws_or_empty = false;
-	}
+      if (it_repl->is_punctuator(",") && is_vaargs(it_repl_next_concat_tok)) {
+	const auto it_repl_lookahead = skip_ws(it_repl_next_concat_tok + 1);
 
-	++it_repl_next;
-	continue;
+	if (it_repl_lookahead == repl_toks.end() ||
+	    !it_repl_lookahead->is_punctuator("##")) {
+	  if (!args.back().empty()) {
+	    result.emplace_back(it_repl->get_type(), it_repl->get_value(),
+				invocation_range);
+	    last_was_ws_or_empty = false;
+	  }
+
+	  it_repl_next = it_repl_next_concat_tok; // Continue at __VA_ARGS__
+	  continue;
+	}
       }
 
       // Otherwise it's a concatenation.
@@ -1988,7 +2004,7 @@ _expand_one(const pp_result::macro &m,
       assert(!it_repl->is_ws());
       if (is_stringification(it_repl)) {
 	concat_result.set_type_and_value(pp_token::type::str,
-					 stringify(it_repl + 1));
+					 stringify(skip_ws(it_repl + 1)));
 
       } else {
 	const std::vector<_pp_token> * arg = nullptr;
@@ -2037,43 +2053,60 @@ _expand_one(const pp_result::macro &m,
 	}
       }
 
-      while (it_repl_next != repl_toks.end() &&
-	     it_repl_next->is_punctuator("##")) {
-	it_repl = it_repl_next + 1;
+      while (it_repl_next_no_ws != repl_toks.end() &&
+	     it_repl_next_no_ws->is_punctuator("##")) {
+	it_repl = it_repl_next_concat_tok;
 	assert(it_repl != repl_toks.end());
 	assert(!it_repl->is_ws());
+
+	if (it_repl->is_punctuator("##")) {
+	  // Multile consecutive ## operators, collate.
+	  it_repl_next = it_repl_next_no_ws = it_repl;
+	  it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
+	  continue;
+	}
+
 	it_repl_next = advance_it_repl(it_repl);
+	it_repl_next_no_ws = skip_ws(it_repl_next);
+	it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
+	assert(it_repl_next_no_ws == repl_toks.end() ||
+	       !it_repl_next_no_ws->is_punctuator("##") ||
+	       it_repl_next_concat_tok != repl_toks.end());
+
+	// Handle the GNU extension that in a sequence of
+	//  ... ## , ## __VA_ARGS__,
+	// the comma gets removed if __VA_ARGS__ is empty.
+	if (it_repl->is_punctuator(",") &&
+	    it_repl_next_no_ws != repl_toks.end() &&
+	    it_repl_next_no_ws->is_punctuator("##") &&
+	    is_vaargs(it_repl_next_concat_tok)) {
+	  const auto it_repl_lookahead = skip_ws(it_repl_next_concat_tok + 1);
+
+	  if (it_repl_lookahead == repl_toks.end() ||
+	      !it_repl_lookahead->is_punctuator("##")) {
+	    if (!args.back().empty()) {
+	      concat_result = _concat(std::move(concat_result),
+				      _pp_token{
+					it_repl->get_type(),
+					it_repl->get_value(),
+					invocation_range
+				      },
+				      invocation_range);
+	    }
+
+	    it_repl_next = it_repl_next_concat_tok; // Continue at __VA_ARGS__
+	    break;
+	  }
+	}
 
 	if (is_stringification(it_repl)) {
 	  concat_result = _concat(std::move(concat_result),
 				  _pp_token{
 					pp_token::type::str,
-					stringify(it_repl + 1),
+					stringify(skip_ws(it_repl + 1)),
 					invocation_range
 				  },
 				  invocation_range);
-
-	} else if (it_repl->is_punctuator(",") &&
-		   it_repl_next != repl_toks.end() &&
-		   it_repl_next->is_punctuator("##") &&
-		   it_repl_next + 1 != repl_toks.end() &&
-		   is_vaargs(it_repl_next + 1) &&
-		   (it_repl_next + 2 == repl_toks.end() ||
-		    !(it_repl_next + 2)->is_punctuator("##"))) {
-	  // Handle the GNU extension that in a sequence of
-	  //  ... ## , ## __VA_ARGS__,
-	  // the comma gets removed if __VA_ARGS__ is empty.
-	  if (!args.back().empty()) {
-	    concat_result = _concat(std::move(concat_result),
-				    _pp_token{
-					it_repl->get_type(),
-					it_repl->get_value(),
-					invocation_range
-				    },
-				    invocation_range);
-	  }
-
-	  ++it_repl_next;
 
 	} else {
 	  const std::vector<_pp_token> * arg = nullptr;
@@ -2123,8 +2156,8 @@ _expand_one(const pp_result::macro &m,
 	    concat_result.expansion_history() +=
 	      arg->back().expansion_history();
 
-	    if (it_repl_next != repl_toks.end() &&
-		it_repl_next->is_punctuator("##")) {
+	    if (it_repl_next_no_ws != repl_toks.end() &&
+		it_repl_next_no_ws->is_punctuator("##")) {
 	      // Mark macro argument tokens participating in
 	      // concatenations as non-passthrough.
 	      if (arg->front().get_passed_through_raw_token() !=
@@ -2154,7 +2187,7 @@ _expand_one(const pp_result::macro &m,
 
     } else if (is_stringification(it_repl)) {
       result.emplace_back(pp_token::type::str,
-			  stringify(it_repl + 1),
+			  stringify(skip_ws(it_repl + 1)),
 			  invocation_range);
       last_was_ws_or_empty = false;
 
@@ -2790,11 +2823,13 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
   }
 
   it = skip_ws(it);
+  raw_pp_tokens repl_toks(it, end);
+  _check_macro_repl(repl_toks.cbegin(), repl_toks.cend(), func_like,
+		    arg_names, report_fatal);
 
-  return (_pp_result->_add_macro
-	  (name, func_like, variadic, std::move(arg_names),
-	   _normalize_macro_repl(it, end, func_like, arg_names, report_fatal),
-	   directive_range));
+  return _pp_result->_add_macro(name, func_like, variadic,
+				std::move(arg_names), std::move(repl_toks),
+				directive_range);
 }
 
 std::tuple<raw_pp_tokens::const_iterator,
@@ -2881,15 +2916,15 @@ preprocessor::_parse_macro_signature
   return std::make_tuple(it, name, func_like, std::move(arg_names), variadic);
 }
 
-raw_pp_tokens preprocessor::
-_normalize_macro_repl(const raw_pp_tokens::const_iterator begin,
-		      const raw_pp_tokens::const_iterator end,
-		      const bool func_like,
-		      const std::vector<std::string> &arg_names,
-		      const _report_fatal_at_raw_tok_type &report_fatal)
+void preprocessor::
+_check_macro_repl(const raw_pp_tokens::const_iterator begin,
+		  const raw_pp_tokens::const_iterator end,
+		  const bool func_like,
+		  const std::vector<std::string> &arg_names,
+		  const _report_fatal_at_raw_tok_type &report_fatal)
 {
   if (begin == end)
-    return raw_pp_tokens();
+    return;
 
   assert(!begin->is_ws() && !(end-1)->is_ws());
 
@@ -2899,56 +2934,30 @@ _normalize_macro_repl(const raw_pp_tokens::const_iterator begin,
     throw report_fatal("## at end of macro replacement list", end - 1);
   }
 
-  // Thanks to pp_tokenizer, we're already free of multiple
-  // consecutive whitespace tokens.
-  // Remove any whitespace separating either ## or # and their
-  // operands. Collapse multiple ## operators into one.
-  auto concat_or_stringify_op_pred = [func_like](const raw_pp_token &tok) {
-    return (tok.is_punctuator("##") ||
-	    (func_like && tok.is_punctuator("#")));
-  };
+  if (!func_like)
+    return;
 
-  raw_pp_tokens result;
-  auto it_seq_begin = begin;
-  while (it_seq_begin != end) {
-    auto it_seq_end = std::find_if(it_seq_begin, end,
-				   concat_or_stringify_op_pred);
-    if (it_seq_end == end) {
-      result.insert(result.end(), it_seq_begin, it_seq_end);
-    } else if (it_seq_end->is_punctuator("##")) {
-      if ((it_seq_end - 1)->is_ws()) {
-	assert((it_seq_end - 1) != it_seq_begin);
-	result.insert(result.end(), it_seq_begin, it_seq_end - 1);
-      } else {
-	result.insert(result.end(), it_seq_begin, it_seq_end);
-      }
-      result.push_back(*it_seq_end);
+  auto &&is_stringify_op_pred =
+    [](const raw_pp_token &tok) { return tok.is_punctuator("#"); };
 
-      while (it_seq_end != end &&
-	     (it_seq_end->is_ws() || it_seq_end->is_punctuator("##"))) {
-	++it_seq_end;
-      }
-    } else {
-      assert(func_like && it_seq_end->is_punctuator("#"));
-      auto it_arg = it_seq_end + 1;
-      if (it_arg != end && it_arg->is_ws())
-	++it_arg;
-      assert(it_arg == end || !it_arg->is_ws());
-      if (it_arg == end || !it_arg->is_id() ||
-	  (std::find(arg_names.cbegin(), arg_names.cend(), it_arg->get_value())
-	   == arg_names.cend())) {
-	throw report_fatal("# in func-like macro not followed by parameter",
-			   it_arg != end ? it_arg : end - 1);
-      }
+  auto &&is_ws_pred =
+    [](const raw_pp_token &tok) { return tok.is_ws(); };
 
-      result.insert(result.end(), it_seq_begin, it_seq_end + 1);
-      result.push_back(*it_arg);
-      it_seq_end = it_arg + 1;
+  auto it = begin;
+  while (it != end) {
+    it = std::find_if(it, end, is_stringify_op_pred);
+    if (it == end)
+      break;
+
+    it = std::find_if_not(it + 1, end, is_ws_pred);
+    if (it == end || !it->is_id() ||
+	(std::find(arg_names.cbegin(), arg_names.cend(), it->get_value())
+	 == arg_names.cend())) {
+      throw report_fatal("# in func-like macro not followed by parameter",
+			 it != end ? it : end - 1);
     }
-    it_seq_begin = it_seq_end;
+    ++it;
   }
-
-  return result;
 }
 
 

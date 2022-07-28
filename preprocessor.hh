@@ -197,12 +197,12 @@ namespace klp
 			 const raw_pp_tokens::const_iterator end,
 			 const _report_fatal_at_raw_tok_type &report_fatal);
 
-      static raw_pp_tokens
-      _normalize_macro_repl(const raw_pp_tokens::const_iterator begin,
-			    const raw_pp_tokens::const_iterator end,
-			    const bool func_like,
-			    const std::vector<std::string> &arg_names,
-			    const _report_fatal_at_raw_tok_type &report_fatal);
+      static void
+      _check_macro_repl(const raw_pp_tokens::const_iterator begin,
+			const raw_pp_tokens::const_iterator end,
+			const bool func_like,
+			const std::vector<std::string> &arg_names,
+			const _report_fatal_at_raw_tok_type &report_fatal);
 
       std::string _base_file;
       const header_resolver &_header_resolver;

@@ -187,17 +187,6 @@ namespace klp
 
 	void _init_do_expand_args();
 
-	raw_pp_tokens::const_iterator
-	_next_non_ws_repl(const raw_pp_tokens::const_iterator it)
-	  const noexcept;
-
-	raw_pp_tokens::const_iterator
-	_skip_stringification_or_single(const raw_pp_tokens::const_iterator &it)
-	  const noexcept;
-
-	bool _is_concat_op(const raw_pp_tokens::const_iterator &it)
-	  const noexcept;
-
 	std::string _name;
 	std::vector<std::string> _arg_names;
 	raw_pp_tokens _repl;
