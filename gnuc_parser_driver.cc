@@ -210,10 +210,10 @@ gnuc_parser_driver::lex(gnuc_parser::semantic_type *value,
 			gnuc_parser::location_type *loc)
 {
   const pp_tokens &tokens = _pp.get_result().get_pp_tokens();
-  pp_token_index last_index;
+  pp_token_index tok_index;
   do {
     try {
-      last_index = _pp.read_next_token();
+      tok_index = _pp.read_next_token();
     } catch (const pp_except&) {
       _grab_pp_remarks();
       throw;
@@ -224,17 +224,17 @@ gnuc_parser_driver::lex(gnuc_parser::semantic_type *value,
       _grab_pp_remarks();
       throw;
     }
-  } while (tokens.back().is_type_any_of<pp_token::type::ws,
-					pp_token::type::empty,
-					pp_token::type::newline>() ||
-	   (tokens.back().is_id() &&
-	    tokens.back().get_value() == "__extension__"));
+  } while (tokens[tok_index].is_type_any_of<pp_token::type::ws,
+					    pp_token::type::empty,
+					    pp_token::type::newline>() ||
+	   (tokens[tok_index].is_id() &&
+	    tokens[tok_index].get_value() == "__extension__"));
   _grab_pp_remarks();
 
-  loc->end = last_index + 1;
-  loc->begin = last_index;
+  loc->end = tok_index + 1;
+  loc->begin = tok_index;
 
-  const pp_token &tok = tokens.back();
+  const pp_token &tok = tokens[tok_index];
   if (tok.is_eof()) {
     return static_cast<gnuc_parser::token_type>(0);
   }
