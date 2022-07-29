@@ -224,8 +224,9 @@ gnuc_parser_driver::lex(gnuc_parser::semantic_type *value,
       _grab_pp_remarks();
       throw;
     }
-  } while (tokens.back().is_ws() ||
-	   tokens.back().is_newline() ||
+  } while (tokens.back().is_type_any_of<pp_token::type::ws,
+					pp_token::type::empty,
+					pp_token::type::newline>() ||
 	   (tokens.back().is_id() &&
 	    tokens.back().get_value() == "__extension__"));
   _grab_pp_remarks();
