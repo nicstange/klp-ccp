@@ -263,213 +263,6 @@ void preprocessor::set_base_file(const std::string &filename)
   _base_file = filename;
 }
 
-pp_token_index preprocessor::read_next_token()
-{
-  // Basically, this is just a wrapper around _read_expanded()
-  // which removes or adds whitespace as needed:
-  // - Whitespace at the end of lines gets removed.
-  // - Multiple whitespace tokens get collated into one.
-  // - Empty lines are removed.
-  // - Whitespace gets inserted inbetween certain kind of tokens
-  //   in order to guarantee idempotency of preprocessing.
-  //
-  // A queue of pending tokens is maintained in ::_pending_tokens.
-  //
-  // The following patters are possible for _pending_tokens at each
-  // invocation:
-  // - a single whitespace token,
-  // - a non-whitespace token from lookahead,
-  // - (added) whitespace + some punctuator, pp_number or id from lookahead
-  //
-  assert(_pending_tokens.empty() ||
-	 (_pending_tokens.size() == 1) ||
-	 (_pending_tokens.size() == 2 && _pending_tokens.front().is_ws() &&
-	  (_pending_tokens.back().get_type() == pp_token::type::punctuator ||
-	   _pending_tokens.back().get_type() == pp_token::type::pp_number ||
-	   _pending_tokens.back().get_type() == pp_token::type::id)));
-  if (!_pending_tokens.empty() &&
-      (_pending_tokens.size() == 2 ||
-       !(_pending_tokens.front()
-	 .is_type_any_of<pp_token::type::ws,
-			 pp_token::type::punctuator,
-			 pp_token::type::pp_number,
-			 pp_token::type::id>()))) {
-    auto tok = std::move(_pending_tokens.front());
-    _pending_tokens.pop();
-    assert(!_line_empty);
-    if (tok.is_newline())
-      _line_empty = true;
-    return _emit_pp_token(*_pp_result, std::move(tok));
-  }
-  assert(_pending_tokens.empty() ||
-	 (_pending_tokens.size() == 1 &&
-	  (_pending_tokens.front().is_type_any_of<pp_token::type::ws,
-						  pp_token::type::punctuator,
-						  pp_token::type::pp_number,
-						  pp_token::type::id>())));
-
- read_next:
-  _pp_token next_tok = _read_expanded();
-  bool empty_seen = false;
-  while (next_tok.is_empty()) {
-    empty_seen = true;
-    next_tok = _read_expanded();
-  }
-  next_tok.expansion_history().clear();
-
-  // First, handle pending whitespace.
-  if (!_pending_tokens.empty() && _pending_tokens.front().is_ws()) {
-    if (next_tok.is_newline()) {
-      // Queued whitespace at end of line. Drop it.
-      _pending_tokens.pop();
-      assert(_pending_tokens.empty());
-      if (!_line_empty) {
-	_line_empty = true;
-	return _emit_pp_token(*_pp_result, std::move(next_tok));
-      }
-      goto read_next;
-
-    } else if (next_tok.is_eof()) {
-      // Queued whitespace at end of file. Drop it.
-      _pending_tokens.pop();
-      assert(_pending_tokens.empty());
-      return _emit_pp_token(*_pp_result, std::move(next_tok));
-
-    }  else if (next_tok.is_ws()) {
-      // Multiple consecutive whitespace tokens.
-      goto read_next;
-    }
-
-    // Something which is not an EOF, newline, whitespace or empty
-    // token. Emit the pending whitespace and queue the current
-    // token.
-    _line_empty = false;
-    _pending_tokens.push(std::move(next_tok));
-    next_tok = std::move(_pending_tokens.front());
-    _pending_tokens.pop();
-    return _emit_pp_token(*_pp_result, std::move(next_tok));
-  }
-
-  // At this point, a pending token, if any, is a punctuator,
-  // pp_number or id which might have to get separated from the
-  // subsequent token by extra whitespace.
-  assert(_pending_tokens.empty() ||
-	 (_pending_tokens.size() == 1 &&
-	  (_pending_tokens.front().is_type_any_of<pp_token::type::punctuator,
-						  pp_token::type::pp_number,
-						  pp_token::type::id>())));
-  // There are certain token combinations where GNU cpp emits an extra
-  // space in order to make preprocessing idempotent:
-  // pp_number {-, +, --, ++, -=, +=, ., id, pp_number}
-  // . pp_number
-  // id {id, pp_number)
-  // + {+, ++, =}, - {-, --, =, >}, ! =, * =, / =, % =, ^ =,
-  // < {<, =, <=, <<=, :, %}, << =, > {>, =, >=, >>=}, >> =,
-  // & {=, &}, | {=, |},
-  // % {=, >, :},  %: %:, : >,
-  // : :, . ., # # if any of these is coming from macro expansion
-  //                or they're separated by any empties
-  if (next_tok.is_ws()) {
-    if (!_pending_tokens.empty()) {
-      std::swap(next_tok, _pending_tokens.front());
-      return _emit_pp_token(*_pp_result, std::move(next_tok));
-    } else {
-      _pending_tokens.push(std::move(next_tok));
-      goto read_next;
-    }
-  } else if (next_tok.is_newline()) {
-    if (_line_empty) {
-      assert(_pending_tokens.empty());
-      goto read_next;
-    } else {
-      if (!_pending_tokens.empty())
-	std::swap(next_tok, _pending_tokens.front());
-      return _emit_pp_token(*_pp_result, std::move(next_tok));
-    }
-  } else if (!next_tok.is_type_any_of<pp_token::type::punctuator,
-				      pp_token::type::pp_number,
-				      pp_token::type::id>()) {
-    _line_empty = false;
-    if (!_pending_tokens.empty())
-      std::swap(next_tok, _pending_tokens.front());
-    return _emit_pp_token(*_pp_result, std::move(next_tok));
-  } else if (_pending_tokens.empty()) {
-    _line_empty = false;
-    _pending_tokens.push(std::move(next_tok));
-    goto read_next;
-  }
-
-  // There is a pending punctuator, pp_numer or id and the next token
-  // is also of this type. Check whether extra whitespace needs to get
-  // inserted.
-  _line_empty = false;
-  _pp_token prev_tok = std::move(_pending_tokens.front());
-  _pending_tokens.pop();
-  if ((prev_tok.is_type_any_of<pp_token::type::pp_number>() &&
-       (next_tok.is_punctuator("-") || next_tok.is_punctuator("+") ||
-	next_tok.is_punctuator("--") || next_tok.is_punctuator("++") ||
-	next_tok.is_punctuator("-=") || next_tok.is_punctuator("+=") ||
-	next_tok.is_punctuator(".") || next_tok.is_id() ||
-	next_tok.is_type_any_of<pp_token::type::pp_number>())) ||
-      (prev_tok.is_punctuator(".") &&
-       next_tok.is_type_any_of<pp_token::type::pp_number>()) ||
-      (prev_tok.is_id() &&
-       (next_tok.is_id() ||
-	next_tok.is_type_any_of<pp_token::type::pp_number>())) ||
-      (prev_tok.is_type_any_of<pp_token::type::punctuator>() &&
-       next_tok.is_type_any_of<pp_token::type::punctuator>() &&
-       ((prev_tok.is_punctuator("+") &&
-	 (next_tok.is_punctuator("+") || next_tok.is_punctuator("++") ||
-	  next_tok.is_punctuator("="))) ||
-	(prev_tok.is_punctuator("-") &&
-	 (next_tok.is_punctuator("-") || next_tok.is_punctuator("--") ||
-	  next_tok.is_punctuator("=") || next_tok.is_punctuator(">"))) ||
-	(prev_tok.is_punctuator("!") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("*") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("/") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("%") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("^") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("<") &&
-	 (next_tok.is_punctuator("<") || next_tok.is_punctuator("=") ||
-	  next_tok.is_punctuator("<=") || next_tok.is_punctuator("<<=") ||
-	  next_tok.is_punctuator(":") || next_tok.is_punctuator("%"))) ||
-	(prev_tok.is_punctuator("<<") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator(">") &&
-	 (next_tok.is_punctuator(">") || next_tok.is_punctuator("=") ||
-	  next_tok.is_punctuator(">=") || next_tok.is_punctuator(">>="))) ||
-	(prev_tok.is_punctuator(">>") && next_tok.is_punctuator("=")) ||
-	(prev_tok.is_punctuator("&") &&
-	 (next_tok.is_punctuator("=") || next_tok.is_punctuator("&"))) ||
-	(prev_tok.is_punctuator("|") &&
-	 (next_tok.is_punctuator("=") || next_tok.is_punctuator("|"))) ||
-	(prev_tok.is_punctuator("%") &&
-	 (next_tok.is_punctuator("=") || next_tok.is_punctuator(">") ||
-	  next_tok.is_punctuator(":"))) ||
-	(prev_tok.is_punctuator("%:") && next_tok.is_punctuator("%:")) ||
-	(prev_tok.is_punctuator(":") && next_tok.is_punctuator(">")) ||
-	(empty_seen &&
-	 ((prev_tok.is_punctuator(":") && next_tok.is_punctuator(":")) ||
-	  (prev_tok.is_punctuator(".") && next_tok.is_punctuator(".")) ||
-	  (prev_tok.is_punctuator("#") && next_tok.is_punctuator("#"))))))) {
-
-    // Insert a ws token. Be careful to set the source range to keep
-    // the source ranges sorted, otherwise the lookup from
-    // raw_pp_tokens_ranges to pp_token_ranges will break.
-    const raw_pp_tokens_range r =
-      (prev_tok.get_token_source() == next_tok.get_token_source() ?
-       next_tok.get_token_source() :
-       raw_pp_tokens_range{next_tok.get_token_source().begin,
-			   next_tok.get_token_source().begin});
-
-    _pp_token extra_ws_tok{pp_token::type::ws, " ", r};
-    extra_ws_tok.set_macro_invocation(next_tok.get_macro_invocation());
-    _pending_tokens.push(std::move(extra_ws_tok));
-  }
-
-  _pending_tokens.push(std::move(next_tok));
-  return _emit_pp_token(*_pp_result, std::move(prev_tok));
-}
-
 void preprocessor::register_builtin_macro(const std::string &name,
 					  const std::string &repl)
 {
@@ -1227,13 +1020,13 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
   }
 }
 
-preprocessor::_pp_token preprocessor::_read_expanded()
+pp_token_index preprocessor::read_next_token()
 {
  from_expansion:
   if (!_expanded_tokens.empty()) {
     auto tok = std::move(_expanded_tokens.front());
     _expanded_tokens.pop();
-    return tok;
+    return _emit_pp_token(*_pp_result, std::move(tok));
   }
 
   auto tok = _read_next_plain_token(_read_ctl::normal);
@@ -1251,7 +1044,7 @@ preprocessor::_pp_token preprocessor::_read_expanded()
     }
   }
 
-  return tok;
+  return _emit_pp_token(*_pp_result, std::move(tok));
 }
 
 std::pair<bool, std::vector<preprocessor::_pp_token>>

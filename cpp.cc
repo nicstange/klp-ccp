@@ -23,6 +23,7 @@
 #include "parse_except.hh"
 #include "pp_except.hh"
 #include "preprocessor.hh"
+#include "depreprocessor.hh"
 #include "semantic_except.hh"
 #include "target/cmdline_except.hh"
 #include "target/gcc/x86_64/target_x86_64_gcc.hh"
@@ -94,6 +95,24 @@ static void show_opt_missing(const char * const prog,
   show_usage(prog);
 }
 
+static pp_token_index emit_tokens_until(const pp_tokens &tokens,
+					const pp_token_index pos,
+					const raw_pp_token_index raw_end)
+{
+  const auto it_end
+    = std::upper_bound(tokens.begin() + pos, tokens.end(),
+		       raw_end,
+		       [](const raw_pp_token_index raw_end,
+			  const pp_token &tok) {
+			 return raw_end <= tok.get_token_source().begin;
+		       });
+  assert(it_end != tokens.end());
+
+  const pp_token_index end = it_end - tokens.begin();
+  emit_normalized_tokens(tokens, pos, end,
+			 [](const std::string &s) { std::cout << s; });
+  return end;
+}
 
 int main(int argc, char* argv[])
 {
@@ -262,16 +281,6 @@ int main(int argc, char* argv[])
 
   pp_token_index tok_index = 0;
   raw_pp_token_index raw_tok_index = 0;
-  auto emit_tokens_until =
-    [&](const raw_pp_token_index end) {
-      for (; tok_index < tokens.size(); ++tok_index) {
-	const auto &tok = tokens[tok_index];
-	if (tok.get_token_source().begin >= end)
-	  break;
-	std::cout << tok.stringify();
-      }
-    };
-
   auto it_src =
     ppr.intersecting_sources_begin(raw_pp_tokens_range{0, raw_tokens.size()});
   auto it_src_end =
@@ -286,7 +295,7 @@ int main(int argc, char* argv[])
     const auto &cur_range = h.get_range();
     if (it_src == it_src_end) {
       emit_src_annotation(h, raw_tok_index);
-      emit_tokens_until(cur_range.end);
+      tok_index = emit_tokens_until(tokens, tok_index, cur_range.end);
       break;
 
     }
@@ -294,13 +303,13 @@ int main(int argc, char* argv[])
     const auto &next_range = it_src->get_range();
     if (next_range.is_contained_in(cur_range)) {
       emit_src_annotation(h, raw_tok_index);
-      emit_tokens_until(next_range.begin);
+      tok_index = emit_tokens_until(tokens, tok_index, next_range.begin);
       raw_tok_index = next_range.begin;
     } else {
       assert(cur_range.is_contained_in(next_range) ||
 	     cur_range.end == next_range.begin);
       emit_src_annotation(h, raw_tok_index);
-      emit_tokens_until(cur_range.end);
+      tok_index = emit_tokens_until(tokens, tok_index, cur_range.end);
       raw_tok_index = cur_range.end;
     }
   }

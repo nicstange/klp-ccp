@@ -21,6 +21,7 @@
 
 #include <string>
 #include <map>
+#include <functional>
 #include "pp_result.hh"
 
 namespace klp
@@ -702,6 +703,12 @@ namespace klp
 
       _cond_incl_stack_type _cond_incl_stack;
     };
+
+    void
+    emit_normalized_tokens(const pp_tokens &tokens,
+			   const pp_token_index begin,
+			   const pp_token_index end,
+			   const std::function<void(const std::string&)> &emit);
   }
 }
 

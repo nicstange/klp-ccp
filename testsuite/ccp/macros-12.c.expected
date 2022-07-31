@@ -1,9 +1,12 @@
 /* klp-ccp: from testsuite/ccp/macros-12.c */
 #define VOID void
 
+#define A()
+#define B()
+
 static VOID (*klpe_espr_g)(void);
 
 void klpp_pu_f(void)
 {
-	(*klpe_espr_g)();
+	A()(*klpe_espr_g)B()();
 }

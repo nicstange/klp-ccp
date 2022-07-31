@@ -128,8 +128,6 @@ namespace klp
 
       void _handle_pp_directive(const _read_ctl ctl);
 
-      _pp_token _read_expanded();
-
       std::pair<bool, std::vector<_pp_token>>
       _try_expand(const raw_pp_token_index id_tok_index,
 		  const std::function<_pp_token(const _read_ctl)> &tok_reader,
@@ -222,7 +220,6 @@ namespace klp
 
       std::size_t __counter__;
       std::queue<_pp_token> _expanded_tokens;
-      std::queue<_pp_token> _pending_tokens;
       bool _maybe_pp_directive;
       bool _line_empty;
       bool _eof;

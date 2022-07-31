@@ -217,7 +217,8 @@ copy_subrange(const pp_tokens_range &r, const bool need_whitespace_before,
   auto &&tok_is_ws_or_newline =
     [](const pp_token &t) {
       return t.is_type_any_of<pp_token::type::ws,
-			      pp_token::type::newline>();
+			      pp_token::type::newline,
+			      pp_token::type::empty>();
     };
 
   auto &&is_insert_ws_op =
@@ -773,6 +774,38 @@ bool depreprocessor::transformed_input_chunk::
 _find_macro_constraints(const pp_result &pp_result,
 			bool next_raw_tok_is_opening_parenthesis)
 {
+  // First, try to enlarge copy ops to include any leading or trailing
+  // empty tokens coming from an overlapping macro invocation.
+  const pp_tokens &toks = pp_result.get_pp_tokens();
+  for (auto &op : _ops) {
+    if (op.a != _op::action::copy)
+      continue;
+
+    pp_tokens_range r = op.r;
+    assert(r.begin != r.end);
+    bool non_empty_found = false;
+    while (!non_empty_found &&
+	   r.begin &&
+	   (toks[r.begin - 1].get_token_source().begin ==
+	    toks[r.begin].get_token_source().begin)) {
+      --r.begin;
+      if (!toks[r.begin].is_type_any_of<pp_token::type::empty>())
+	non_empty_found = true;
+    }
+
+    while (!non_empty_found &&
+	   r.end < toks.size() &&
+	   (toks[r.end - 1].get_token_source().begin ==
+	    toks[r.end].get_token_source().begin)) {
+      if (!toks[r.end].is_type_any_of<pp_token::type::empty>())
+	non_empty_found = true;
+      ++r.end;
+    }
+
+    if (!non_empty_found)
+      op.r = r;
+  }
+
   const raw_pp_tokens_range range_raw = _get_range_raw(pp_result);
   const auto mis = pp_result.find_overlapping_macro_invocations(range_raw);
 
@@ -1666,9 +1699,9 @@ _write(source_writer &writer, _output_state &state,
 	  }
 	  cond_incl_trans_in_mi.clear();
 
-	  const pp_tokens &toks = pp_result.get_pp_tokens();
-	  while (cur_pos.tok != it_range_to_emit_expanded->end) {
-	    const pp_token &tok = toks[cur_pos.tok];
+	  if (cur_pos.tok != it_range_to_emit_expanded->end) {
+	    const pp_tokens &toks = pp_result.get_pp_tokens();
+
 	    const raw_pp_tokens_range tok_range_raw =
 	      pp_result.pp_tokens_range_to_raw(pp_tokens_range{
 							cur_pos.tok,
@@ -1676,15 +1709,24 @@ _write(source_writer &writer, _output_state &state,
 					       });
 	    advance_source_to(tok_range_raw.begin);
 	    _set_input_file(writer, state, &*it_source);
-	    writer.append(pp_token::stringify(tok.get_type(), tok.get_value()));
-	    ++cur_pos.tok;
 
-	    state.last_was_newline = tok.is_newline();
-	    skip_following_insert_ws = (tok.is_punctuator("(") ||
-					tok.is_punctuator("[") ||
-					tok.is_punctuator("{") ||
-					tok.is_ws() ||
+	    emit_normalized_tokens(toks, cur_pos.tok,
+				   it_range_to_emit_expanded->end,
+				   [&](const std::string &s) {
+				     writer.append(s);
+				   });
+
+	    const pp_token_index last_index =
+	      it_range_to_emit_expanded->end - 1;
+	    const pp_token &last_tok = toks[last_index];
+
+	    state.last_was_newline = last_tok.is_newline();
+	    skip_following_insert_ws = (last_tok.is_punctuator("(") ||
+					last_tok.is_punctuator("[") ||
+					last_tok.is_punctuator("{") ||
+					last_tok.is_ws() ||
 					state.last_was_newline);
+	    cur_pos.tok = it_range_to_emit_expanded->end;
 	  }
 
 	  state.last_input_pos_raw =
@@ -4430,4 +4472,148 @@ _write_cond_incl_transition(source_writer &writer,
   }
 
   state.last_was_newline = true;
+}
+
+
+void klp::ccp::
+emit_normalized_tokens(const pp_tokens &tokens,
+		       const pp_token_index begin,
+		       const pp_token_index end,
+		       const std::function<void(const std::string&)> &emit)
+{
+  assert(begin < tokens.size());
+  assert(end < tokens.size());
+
+  // For comparability, normalize the output like GNU cpp, namely
+  // remove or add whitespace as needed:
+  // - Whitespace at the end of lines gets removed.
+  // - Multiple whitespace tokens get collated into one.
+  // - Empty lines are removed.
+  // - Whitespace gets inserted inbetween certain kind of tokens
+  //   in order to guarantee idempotency of preprocessing.
+  //
+  // A queue of pending tokens is maintained in pending_tokens.
+  //
+  // The following patters are possible for pending_tokens at any
+  // point in time:
+  // - a single whitespace token,
+  // - a non-whitespace token from lookahead,
+  // - (added) whitespace + some punctuator, pp_number or id from lookahead
+  //
+  bool line_empty = true;
+  pp_token_index pos = begin;
+  while (pos < end) {
+    const auto &tok = tokens[pos];
+
+    if (tok.is_type_any_of<pp_token::type::empty>()) {
+      ++pos;
+
+    } else if (tok.is_newline()) {
+      if (!line_empty)
+	emit(tok.stringify());
+      line_empty = true;
+      ++pos;
+
+    } else if (tok.is_ws()) {
+      pp_token_index next_pos = pos + 1;
+      while (next_pos < tokens.size() &&
+	     tokens[next_pos].is_type_any_of<pp_token::type::ws,
+					     pp_token::type::empty>()) {
+	++next_pos;
+      }
+
+      if (next_pos < tokens.size() &&
+	  !tokens[next_pos].is_newline() &&
+	  !tokens[next_pos].is_eof()) {
+	emit(tok.stringify());
+      }
+
+      pos = next_pos;
+
+    } else {
+      line_empty = false;
+      emit(tok.stringify());
+
+      bool empty_seen = false;
+      pp_token_index next_pos = pos + 1;
+      while (next_pos < tokens.size() &&
+	     tokens[next_pos].is_type_any_of<pp_token::type::empty>()) {
+	empty_seen = true;
+	++next_pos;
+      }
+      pos = next_pos;
+      if(next_pos == tokens.size())
+	break;
+
+      // There are certain token combinations where GNU cpp emits an extra
+      // space in order to make preprocessing idempotent:
+      // pp_number {-, +, --, ++, -=, +=, ., id, pp_number}
+      // . pp_number
+      // id {id, pp_number)
+      // + {+, ++, =}, - {-, --, =, >}, ! =, * =, / =, % =, ^ =,
+      // < {<, =, <=, <<=, :, %}, << =, > {>, =, >=, >>=}, >> =,
+      // & {=, &}, | {=, |},
+      // % {=, >, :},  %: %:, : >,
+      // : :, . ., # # if any of these is coming from macro expansion
+      //               or they're separated by any empties
+      const auto &next_tok = tokens[next_pos];
+      if (!tok.is_type_any_of<pp_token::type::pp_number,
+			      pp_token::type::id,
+			      pp_token::type::punctuator>() ||
+	  !next_tok.is_type_any_of<pp_token::type::pp_number,
+				   pp_token::type::id,
+				   pp_token::type::punctuator>()) {
+	continue;
+      }
+
+      if ((tok.is_type_any_of<pp_token::type::pp_number>() &&
+	   (next_tok.is_punctuator("-") || next_tok.is_punctuator("+") ||
+	    next_tok.is_punctuator("--") || next_tok.is_punctuator("++") ||
+	    next_tok.is_punctuator("-=") || next_tok.is_punctuator("+=") ||
+	    next_tok.is_punctuator(".") || next_tok.is_id() ||
+	    next_tok.is_type_any_of<pp_token::type::pp_number>())) ||
+	  (tok.is_punctuator(".") &&
+	   next_tok.is_type_any_of<pp_token::type::pp_number>()) ||
+	  (tok.is_id() &&
+	   (next_tok.is_id() ||
+	    next_tok.is_type_any_of<pp_token::type::pp_number>())) ||
+	  (tok.is_type_any_of<pp_token::type::punctuator>() &&
+	   next_tok.is_type_any_of<pp_token::type::punctuator>() &&
+	   ((tok.is_punctuator("+") &&
+	     (next_tok.is_punctuator("+") || next_tok.is_punctuator("++") ||
+	      next_tok.is_punctuator("="))) ||
+	    (tok.is_punctuator("-") &&
+	     (next_tok.is_punctuator("-") || next_tok.is_punctuator("--") ||
+	      next_tok.is_punctuator("=") || next_tok.is_punctuator(">"))) ||
+	    (tok.is_punctuator("!") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("*") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("/") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("%") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("^") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("<") &&
+	     (next_tok.is_punctuator("<") || next_tok.is_punctuator("=") ||
+	      next_tok.is_punctuator("<=") || next_tok.is_punctuator("<<=") ||
+	      next_tok.is_punctuator(":") || next_tok.is_punctuator("%"))) ||
+	    (tok.is_punctuator("<<") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator(">") &&
+	     (next_tok.is_punctuator(">") || next_tok.is_punctuator("=") ||
+	      next_tok.is_punctuator(">=") || next_tok.is_punctuator(">>="))) ||
+	    (tok.is_punctuator(">>") && next_tok.is_punctuator("=")) ||
+	    (tok.is_punctuator("&") &&
+	     (next_tok.is_punctuator("=") || next_tok.is_punctuator("&"))) ||
+	    (tok.is_punctuator("|") &&
+	     (next_tok.is_punctuator("=") || next_tok.is_punctuator("|"))) ||
+	    (tok.is_punctuator("%") &&
+	     (next_tok.is_punctuator("=") || next_tok.is_punctuator(">") ||
+	      next_tok.is_punctuator(":"))) ||
+	    (tok.is_punctuator("%:") && next_tok.is_punctuator("%:")) ||
+	    (tok.is_punctuator(":") && next_tok.is_punctuator(">")) ||
+	    (empty_seen &&
+	     ((tok.is_punctuator(":") && next_tok.is_punctuator(":")) ||
+	      (tok.is_punctuator(".") && next_tok.is_punctuator(".")) ||
+	      (tok.is_punctuator("#") && next_tok.is_punctuator("#"))))))) {
+	emit(" ");
+      }
+    }
+  }
 }
