@@ -135,8 +135,7 @@ namespace klp
 
       _scanned_macro_invocation
       _read_func_macro_invocation
-		(const std::size_t non_va_arg_count,
-		 const bool is_variadic,
+		(const pp_result::macro &m,
 		 const raw_pp_token_index invocation_begin,
 		 const std::function<_pp_token(const _read_ctl)> &token_reader);
 
@@ -158,8 +157,9 @@ namespace klp
 		  const raw_pp_tokens_range &invocation_range);
 
       std::vector<_pp_token>
-      _expand_one_builtin_special(const pp_result::macro &macro,
-				  const raw_pp_token_index id_tok);
+      _expand_one_builtin_special(const pp_result::macro &m,
+				  std::vector<_pp_tokens> &&args,
+				  const raw_pp_tokens_range &invocation_range);
 
       static std::string _stringify(const std::vector<_pp_token> &arg_toks);
 
@@ -219,6 +219,8 @@ namespace klp
       code_remarks _remarks;
 
       std::size_t __counter__;
+      const pp_result::macro &_m_defined_op;
+
       std::queue<_pp_token> _expanded_tokens;
       bool _maybe_pp_directive;
       bool _line_empty;

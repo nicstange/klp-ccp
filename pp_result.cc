@@ -58,6 +58,17 @@ pp_result::macro::macro(const std::string &name,
 {}
 
 pp_result::macro::macro(const std::string &name,
+			std::vector<std::string> &&arg_names,
+			const unsigned long predefinition_pos,
+			const builtin_special_tag&)
+  : _name(name), _arg_names(std::move(arg_names)),
+    _o(_origin::o_builtin_special),
+    _predefinition_pos(predefinition_pos),
+    _func_like(true),
+    _variadic(false)
+{}
+
+pp_result::macro::macro(const std::string &name,
 			const bool func_like,
 			const bool variadic,
 			std::vector<std::string> &&arg_names,
@@ -1501,6 +1512,16 @@ _add_macro(const std::string &name, const macro::builtin_special_tag &tag)
 {
   _macros.push_back(std::unique_ptr<const macro>{
 			new macro{name, _next_predefinition_pos++, tag}});
+  return *_macros.back();
+}
+
+const pp_result::macro& pp_result::
+_add_macro(const std::string &name, std::vector<std::string> &&arg_names,
+	   const macro::builtin_special_tag &tag)
+{
+  _macros.push_back(std::unique_ptr<const macro>{
+			new macro{name, std::move(arg_names),
+				  _next_predefinition_pos++, tag}});
   return *_macros.back();
 }
 

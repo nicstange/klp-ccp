@@ -226,6 +226,8 @@ preprocessor::preprocessor(const header_resolver &header_resolver,
     _cur_header_inclusion_root(_pp_result->get_header_inclusion_roots()
 			       .begin()),
     _cond_incl_nesting(0), __counter__(0),
+    _m_defined_op(_pp_result->_add_macro("defined", {"identifier"},
+				 pp_result::macro::builtin_special_tag{})),
     _maybe_pp_directive(true), _line_empty(true),
     _eof(false), _eof_index(std::numeric_limits<raw_pp_token_index>::max()),
     _peeked_begin(_none_peeked)
@@ -1057,75 +1059,44 @@ preprocessor::_try_expand
 
   const auto &raw_tokens = _pp_result->get_raw_tokens();
   assert(raw_tokens[id_tok_index].get_type() == pp_token::type::id);
-  auto m = _macros.find(raw_tokens[id_tok_index].get_value());
-  if (m == _macros.end()) {
-    if (from_cond_incl_cond &&
-	raw_tokens[id_tok_index].get_value() == "defined") {
-      const _scanned_macro_invocation smi =
-	_read_defined_operator_invocation(id_tok_index, token_reader);
-
-      // After the expansion, the whole defined(...) sequence will
-      // be replaced by either zero or one and there won't be any
-      // trace of the "defined" identifier token left. In
-      // particular, it will be to impossible to derive a
-      // macro_nondef_constraint from the resulting pp_tokens
-      // sequence. Add it here.
-      _cond_incl_states.top().mnc +=
-	pp_result::macro_nondef_constraint{"defined"};
-
-      assert(smi.args.size() == 1 && smi.args[0].size() == 1);
-      const std::string &id = smi.args[0][0].get_value();
-      bool is_defined = false;
-      auto it_m = _macros.find(id);
-      if (it_m != _macros.end()) {
-	assert(!_cond_incl_states.empty());
-	_cond_incl_states.top().um += it_m->second;
-	is_defined = true;
-      } else {
-	assert(!_cond_incl_states.empty());
-	_cond_incl_states.top().mnc += pp_result::macro_nondef_constraint{id};
-      }
-
-      return (std::make_pair
-	      (true,
-	       _pp_tokens_type{
-			_pp_token(pp_token::type::pp_number,
-				  is_defined ? "1" : "0",
-				  raw_pp_tokens_range{id_tok_index,
-						      smi.invocation_end})
-	       }));
-    }
-
+  const pp_result::macro *m = nullptr;
+  auto it_m = _macros.find(raw_tokens[id_tok_index].get_value());
+  if (it_m != _macros.end()) {
+    m = &it_m->second.get();
+  } else if (from_cond_incl_cond &&
+	     raw_tokens[id_tok_index].get_value() == "defined") {
+    m = &_m_defined_op;
+  } else {
     return std::make_pair(false, _pp_tokens_type{});
   }
 
   pp_result::macro_invocation *mi;
   std::vector<_macro_expansion_stack_entry> expansion_stack;
-  if (m->second.get().is_func_like()) {
-    _pp_token next_tok = token_reader(_read_ctl::peek);
-    while (next_tok.is_ws() || next_tok.is_newline() || next_tok.is_empty())
-      next_tok = token_reader(_read_ctl::peek);
+  if (m->is_func_like()) {
+    if (m != &_m_defined_op) {
+      _pp_token next_tok = token_reader(_read_ctl::peek);
+      while (next_tok.is_ws() || next_tok.is_newline() || next_tok.is_empty())
+	next_tok = token_reader(_read_ctl::peek);
 
-    if (!next_tok.is_punctuator("("))
-      return std::make_pair(false, _pp_tokens_type{});
+      if (!next_tok.is_punctuator("("))
+	return std::make_pair(false, _pp_tokens_type{});
+    }
 
     _scanned_macro_invocation smi =
-      _read_func_macro_invocation(m->second.get().non_va_arg_count(),
-				  m->second.get().is_variadic(),
-				  id_tok_index, token_reader);
+      _read_func_macro_invocation(*m, id_tok_index, token_reader);
 
-    mi = &_pp_result->_add_macro_invocation(m->second,
+    mi = &_pp_result->_add_macro_invocation(*m,
 					    raw_pp_tokens_range{
 					      id_tok_index, smi.invocation_end
 					    });
-    expansion_stack.emplace_back(m->second, std::move(smi.args));
+    expansion_stack.emplace_back(*m, std::move(smi.args));
 
   } else {
-    mi = &_pp_result->_add_macro_invocation(m->second,
+    mi = &_pp_result->_add_macro_invocation(*m,
 					    raw_pp_tokens_range{
 					      id_tok_index, id_tok_index + 1
 					    });
-    expansion_stack.emplace_back(m->second);
+    expansion_stack.emplace_back(*m);
 
   }
   std::stack<_pp_tokens_type> result_stack;
@@ -1139,6 +1110,10 @@ preprocessor::_try_expand
       // As long as there are macro arguments pending expansion, handle those,
       // one at a time.
       assert(!t.args.size() || t.m);
+      if (t.m == &_m_defined_op) {
+	// Don't expand the arguent to the defined() operator.
+	t.next_arg = t.args.size();
+      }
       while (t.next_arg != t.args.size() && !t.m->shall_expand_arg(t.next_arg))
 	++t.next_arg;
       if (t.next_arg != t.args.size()) {
@@ -1255,8 +1230,21 @@ preprocessor::_try_expand
 	  }
 	};
 
-      auto m = _macros.find(cur_out_token.get_value());
-      if (m == _macros.end()) {
+      m = nullptr;
+      it_m = _macros.find(cur_out_token.get_value());
+      if (it_m != _macros.end()) {
+	if (cur_out_token.expansion_history().count(it_m->second.get())) {
+	  result_stack.top().emplace_back(std::move(cur_out_token));
+	  continue;
+	}
+
+	m = &it_m->second.get();
+
+      } else if (from_cond_incl_cond &&
+		 cur_out_token.get_value() == "defined") {
+	m = &_m_defined_op;
+
+      } else {
 	// The current token came from some macro expansion, but
 	// doesn't resolve to a macro definition itself. Register a
 	// macro_nondef_constraint instance at the
@@ -1274,66 +1262,43 @@ preprocessor::_try_expand
 	  pp_result::macro_nondef_constraint{cur_out_token.get_value(),
 					     !next_tok.is_punctuator("(")};
 
+	result_stack.top().emplace_back(std::move(cur_out_token));
+	continue;
 
-	if (from_cond_incl_cond && cur_out_token.get_value() == "defined") {
-	  const _scanned_macro_invocation smi =
-	    _read_defined_operator_invocation(id_tok_index, read_tok);
+      }
 
-	  assert(smi.args.size() == 1 && smi.args[0].size() == 1);
-	  if (mi->get_source_range().end < smi.invocation_end)
-	    _pp_result->_extend_macro_invocation_range(*mi, smi.invocation_end);
-	  const std::string &id = smi.args[0][0].get_value();
-	  bool is_defined = false;
-	  auto it_m = _macros.find(id);
-	  if (it_m != _macros.end()) {
-	    assert(!_cond_incl_states.empty());
-	    _cond_incl_states.top().um += it_m->second;
-	    is_defined = true;
-	  } else {
-	    assert(!_cond_incl_states.empty());
-	    _cond_incl_states.top().mnc +=
-	      pp_result::macro_nondef_constraint{id};
+      if (m->is_func_like()) {
+	if (m != &_m_defined_op) {
+	  _pp_token next_tok = read_tok(_read_ctl::peek);
+	  while (next_tok.is_ws() || next_tok.is_newline()
+		 || next_tok.is_empty()) {
+	    next_tok = read_tok(_read_ctl::peek);
 	  }
 
-	  result_stack.top().emplace_back
-				(pp_token::type::pp_number,
-				 is_defined ? "1" : "0",
-				 raw_pp_tokens_range{id_tok_index,
-						     smi.invocation_end});
+	  if (!next_tok.is_punctuator("(")) {
+	    // This macro is defined as a function style macro, but
+	    // won't get expanded, because it isn't followed by an
+	    // opening '('. Register a macro_nondef_constraint for
+	    // object style macros only.
+	    mi->_macro_nondef_constraints +=
+	      pp_result::macro_nondef_constraint{cur_out_token.get_value(),
+						 true};
 
-	} else {
-	  result_stack.top().emplace_back(std::move(cur_out_token));
+	    result_stack.top().emplace_back(std::move(cur_out_token));
+	    continue;
+	  }
 	}
-      } else if (cur_out_token.expansion_history().count(m->second)) {
-	  result_stack.top().emplace_back(std::move(cur_out_token));
-      } else if (m->second.get().is_func_like()) {
-	_pp_token next_tok = read_tok(_read_ctl::peek);
-	while (next_tok.is_ws() || next_tok.is_newline() || next_tok.is_empty())
-	  next_tok = read_tok(_read_ctl::peek);
 
-	if (next_tok.is_punctuator("(")) {
-	  _scanned_macro_invocation smi =
-	    _read_func_macro_invocation(m->second.get().non_va_arg_count(),
-					m->second.get().is_variadic(),
-					id_tok_index, read_tok);
-	  expansion_stack.emplace_back(m->second, std::move(smi.args));
-	  if (mi->get_source_range().end < smi.invocation_end)
-	    _pp_result->_extend_macro_invocation_range(*mi, smi.invocation_end);
-	  break;
-	} else {
-	  // This macro is defined as a function style macro, but
-	  // won't get expanded, because it isn't followed by an
-	  // opening '('. Register a macro_nondef_constraint for
-	  // object style macros only.
-	  mi->_macro_nondef_constraints +=
-	    pp_result::macro_nondef_constraint{cur_out_token.get_value(), true};
-
-	  result_stack.top().emplace_back(std::move(cur_out_token));
-	}
+	_scanned_macro_invocation smi =
+	  _read_func_macro_invocation(*m, id_tok_index, read_tok);
+	expansion_stack.emplace_back(*m, std::move(smi.args));
+	if (mi->get_source_range().end < smi.invocation_end)
+	  _pp_result->_extend_macro_invocation_range(*mi, smi.invocation_end);
+	break;
 
       } else {
 	// Object-like macro invocation.
-	expansion_stack.emplace_back(m->second);
+	expansion_stack.emplace_back(*m);
 	break;
 
       }
@@ -1400,11 +1365,15 @@ std::string preprocessor::_pp_token::stringify() const
 
 preprocessor::_scanned_macro_invocation preprocessor::
 _read_func_macro_invocation
-	(const std::size_t non_va_arg_count,
-	 const bool is_variadic,
+	(const pp_result::macro &m,
 	 const raw_pp_token_index invocation_begin,
 	 const std::function<_pp_token(const _read_ctl)> &token_reader)
 {
+  if (&m == &_m_defined_op)
+    return _read_defined_operator_invocation(invocation_begin, token_reader);
+
+  const std::size_t non_va_arg_count = m.non_va_arg_count();
+  const bool is_variadic = m.is_variadic();
   _scanned_macro_invocation result{};
 
   result.n_tokens = 1; // For the identifier token
@@ -1671,7 +1640,7 @@ _expand_one(const pp_result::macro &m,
 	    const raw_pp_tokens_range &invocation_range)
 {
   if (m.is_builtin_special()) {
-    return _expand_one_builtin_special(m, invocation_range.begin);
+    return _expand_one_builtin_special(m, std::move(args), invocation_range);
   }
 
   // This is the core of macro expansion.
@@ -2061,12 +2030,30 @@ _expand_one(const pp_result::macro &m,
 
 std::vector<preprocessor::_pp_token> preprocessor::
 _expand_one_builtin_special(const pp_result::macro &m,
-			    const raw_pp_token_index id_tok)
+			    std::vector<_pp_tokens> &&args,
+			    const raw_pp_tokens_range &invocation_range)
 {
   std::vector<preprocessor::_pp_token> result;
-  const raw_pp_tokens_range invocation_range{id_tok};
 
-  if (m.get_name() == "__FILE__") {
+  if (&m == &_m_defined_op) {
+    assert(args.size() == 1 && args[0].size() == 1 && args[0][0].is_id());
+    const std::string &id = args[0][0].get_value();
+    bool is_defined = false;
+    auto it_m = _macros.find(id);
+    if (it_m != _macros.end()) {
+      assert(!_cond_incl_states.empty());
+      _cond_incl_states.top().um += it_m->second;
+      is_defined = true;
+    } else {
+      assert(!_cond_incl_states.empty());
+      _cond_incl_states.top().mnc += pp_result::macro_nondef_constraint{id};
+    }
+
+    result.emplace_back(pp_token::type::pp_number,
+			is_defined ? "1" : "0",
+			invocation_range, pp_result::used_macros{});
+
+  } else if (m.get_name() == "__FILE__") {
     const auto &source =
       _raw_pp_tokens_range_to_source(invocation_range);
 

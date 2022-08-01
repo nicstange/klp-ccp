@@ -162,6 +162,11 @@ namespace klp
 	      const builtin_special_tag&);
 
 	macro(const std::string &name,
+	      std::vector<std::string> &&arg_names,
+	      const unsigned long predefinition_pos,
+	      const builtin_special_tag&);
+
+	macro(const std::string &name,
 	      const bool func_like,
 	      const bool variadic,
 	      std::vector<std::string> &&arg_names,
@@ -1436,6 +1441,10 @@ namespace klp
 			      const raw_pp_tokens_range &directive_range);
 
       const macro& _add_macro(const std::string &name,
+			      const macro::builtin_special_tag &tag);
+
+      const macro& _add_macro(const std::string &name,
+			      std::vector<std::string> &&arg_names,
 			      const macro::builtin_special_tag &tag);
 
       const macro& _add_macro(const std::string &name,
