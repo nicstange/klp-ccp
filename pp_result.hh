@@ -23,6 +23,7 @@
 #include <memory>
 #include <utility>
 #include <set>
+#include <stack>
 #include "raw_pp_tokens.hh"
 #include "raw_pp_tokens_range.hh"
 #include "pp_token.hh"
@@ -537,6 +538,228 @@ namespace klp
       class macro_invocation
       {
       public:
+	class expansion_forest
+	{
+	private:
+	  class _rescan_macro_invocation;
+
+	  // Represent the full macro expansion history with a forest
+	  // of trees of _rescan_macro_invocation nodes.
+	  //
+	  // During macro expansion, the result gets (recursively)
+	  // scanned for more macro invocations and further expanded
+	  // as appropriate. This process is represented by a "rescan"
+	  // tree of _rescan_macro_invocation nodes, where a single
+	  // such node represents the non-recursive expansion of some
+	  // macro invocation identified during rescan. Two
+	  // _rescan_macro_invocation nodes form a parent-child
+	  // relationship whenever the macro identifier token
+	  // corresponding to the latter has been found in the
+	  // rescanned expansion result of the former. Note that this
+	  // does not necessarily mean that the whole token sequence
+	  // making up the child's invocation comes from the parent's
+	  // output -- in the case of multi-token invocations (i.e. of
+	  // function-like macros), the trailing parts can also
+	  // originate from outputs higher up in the tree hierarchy or
+	  // from raw input even.
+	  //
+	  // Function-like macros can have arguments, which are also
+	  // subject to recursive expansion and thus, a
+	  // _rescan_macro_invocation's expanded arguments are
+	  // likewise represented by "rescan" trees (*). Note that
+	  // some other _rescan_macro_invocation being part of such an
+	  // argument expansion tree can in turn have arguments and so
+	  // on. Thus, some macro invocation's full expansion process
+	  // can be described by a forest of "rescan" trees, with some
+	  // additional structure on it:
+	  // - There is one distinguished "rescan" tree corresponding
+	  //   to the recursively rescanned macro invocation found in
+	  //   the raw input.
+	  // - Each _rescan_macro_invocation node can link to further
+	  //   "rescan" trees, with each such one representing one of
+	  //   the macro invocation's arguments. In what follows, this
+	  //   _rescan_macro_invocation node is said to "own" the
+	  //   "rescan" trees corresponding to its arguments each.
+	  //
+	  // For the internal representation, all of the forest's
+	  // _rescan_macro_invocation nodes are kept in a single
+	  // sequence. The relative order of a single tree's nodes
+	  // within that sequence is defined to be of DFS pre order.
+	  // All "rescan" trees corresponding to arguments are
+	  // serialized immediately after their resp. owner node, in
+	  // argument order. This fully specifies the serialization
+	  // order of all of a forest's node.
+	  //
+	  // Each _rescan_macro_invocation refers to its "rescan" tree
+	  // parent, if any, by means of an index within the forest's
+	  // serialized node sequence,
+	  // c.f. _rescan_macro_invocation::_rescan_parent. Any
+	  // "rescan" tree root has its _rescan_parent set to some
+	  // special value reserved for marking roots. Together with
+	  // the number of each expansion node's arguments as stored
+	  // in _rescan_macro_invocation::_nargs, this allows for the
+	  // reconstruction of the full expansion forest structure.
+	  //
+	  // (*) Within an unexpanded token sequence forming some
+	  //     macro argument, there can potentially be multiple,
+	  //     non-intersecting macro invocations present, perhaps
+	  //     interspersed with some more tokens not subject to
+	  //     macro expansion. For the sake of code unformity,
+	  //     these are all united under a single dummy
+	  //     _rescan_macro_invocation root not corresponding to an
+	  //     actual macro invocation, but rather an identity
+	  //     transformation on the argument's unexpanded token
+	  //     sequence.
+	  class _forest_nodes
+	  {
+	  private:
+	    typedef std::vector<_rescan_macro_invocation> _container_type;
+	    _container_type _nodes;
+
+	  public:
+	    class size_type
+	    {
+	    public:
+	      constexpr bool operator==(const size_type rhs) const noexcept
+	      {
+		return this->_n == rhs._n;
+	      }
+
+	      constexpr bool operator!=(const size_type rhs) const noexcept
+	      { return !(*this == rhs); }
+
+	      static constexpr const size_type invalid() noexcept
+	      {
+		return size_type{
+		  std::numeric_limits<_container_type::size_type>::max()
+		};
+	      }
+
+	      constexpr bool operator<(const size_type rhs) const noexcept
+	      {
+		// invalid() is not comparable to anything.
+		return rhs != invalid() && this->_n < rhs._n;
+	      }
+
+	    private:
+	      friend class _forest_nodes;
+
+	      size_type() = delete;
+
+	      explicit constexpr size_type(const _container_type::size_type n)
+		noexcept
+		: _n(n)
+	      {}
+
+	      _container_type::size_type _n;
+	    }; // class size_type
+
+	    _forest_nodes(const macro &m,
+			  const std::size_t src_begin,
+			  const std::size_t src_length);
+
+	    _rescan_macro_invocation& operator[](const size_type n) noexcept;
+
+	    const _rescan_macro_invocation& operator[](const size_type n)
+	      const noexcept;
+
+	    size_type
+	    add_rescan_invocation(const _forest_nodes::size_type rescan_parent,
+				  const macro &m,
+				  const std::size_t src_begin,
+				  const std::size_t src_length);
+
+	    size_type
+	    add_macro_arg_tree(const _forest_nodes::size_type owner,
+			       const std::size_t src_begin,
+			       const std::size_t src_length);
+	  }; // class _forest_nodes
+
+	  class _rescan_macro_invocation
+	  {
+	  public:
+	    std::size_t src_begin() const noexcept
+	    { return _src_begin; }
+
+	    std::size_t src_length() const noexcept
+	    { return _src_length; }
+
+	    std::size_t out_length() const noexcept
+	    { return _out_length; }
+
+	    bool is_rescan_tree_root() const noexcept;
+
+	    bool is_arg_tree_root() const noexcept;
+
+	    _forest_nodes::size_type get_rescan_parent() const noexcept;
+
+	    std::size_t nargs() const noexcept
+	    { return _nargs; }
+
+	    const macro& get_macro() const noexcept;
+
+	  private:
+	    friend class _forest_nodes;
+
+	    _rescan_macro_invocation
+			(const _forest_nodes::size_type rescan_parent,
+			 const macro &m,
+			 const std::size_t src_begin,
+			 const std::size_t src_length);
+
+	    _rescan_macro_invocation(const std::size_t src_begin,
+				     const std::size_t src_length);
+
+	    _forest_nodes::size_type _rescan_parent;
+	    std::size_t _nargs;
+
+	    /*
+	     * Relative to _parent's output begin, if any.
+	     * Otherwise relative to raw_pp_tokens.
+	     */
+	    std::size_t _src_begin;
+	    std::size_t _src_length;
+	    std::size_t _out_length;
+
+	    const macro *_m;
+	  }; // class _rescan_macro_invocation
+
+	  class _rescan_macro_invocation_ref
+	  {
+	  public:
+	    _rescan_macro_invocation_ref(const _forest_nodes &forest,
+					 const _forest_nodes::size_type node)
+	      noexcept;
+
+	    bool operator==(const _rescan_macro_invocation_ref &rhs)
+	      const noexcept;
+
+	    const _forest_nodes& get_forest() const noexcept
+	    { return _forest.get(); }
+
+	    const _forest_nodes::size_type get_node() const noexcept
+	    { return _node; }
+
+	    const _rescan_macro_invocation& deref() const noexcept;
+
+	  private:
+	    std::reference_wrapper<const _forest_nodes> _forest;
+	    _forest_nodes::size_type _node;
+	  }; // class _rescan_macro_invocation_ref;
+
+	public:
+	  expansion_forest(const macro &m,
+			   const std::size_t src_begin,
+			   const std::size_t src_length);
+
+	private:
+	  _forest_nodes _forest;
+	}; // class expansion_forest
+
+      private:
+	expansion_forest _expansion_forest;
+
+      public:
 	class passed_through_arg_token
 	{
 	public:
@@ -587,7 +810,8 @@ namespace klp
 	friend class preprocessor;
 
 	macro_invocation(const macro &m,
-			 const raw_pp_tokens_range &invocation_range);
+			 const raw_pp_tokens_range &invocation_range,
+			 const std::size_t src_length);
 
 	void _add_passed_through_macro_arg_token
 			(const raw_pp_token_index arg_tok_raw,
@@ -1469,7 +1693,8 @@ namespace klp
 
       macro_invocation&
       _add_macro_invocation(const macro &m,
-			    const raw_pp_tokens_range &invocation_range);
+			    const raw_pp_tokens_range &invocation_range,
+			    const std::size_t src_length);
 
       void _extend_macro_invocation_range(macro_invocation &invocation,
 					  const raw_pp_token_index new_end);

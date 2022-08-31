@@ -1088,14 +1088,16 @@ preprocessor::_try_expand
     mi = &_pp_result->_add_macro_invocation(*m,
 					    raw_pp_tokens_range{
 					      id_tok_index, smi.invocation_end
-					    });
+					    },
+					    smi.n_tokens);
     expansion_stack.emplace_back(*m, std::move(smi.args));
 
   } else {
     mi = &_pp_result->_add_macro_invocation(*m,
 					    raw_pp_tokens_range{
 					      id_tok_index, id_tok_index + 1
-					    });
+					    },
+					    1);
     expansion_stack.emplace_back(*m);
 
   }

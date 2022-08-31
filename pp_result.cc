@@ -347,8 +347,10 @@ pp_result::macro_nondef_constraints::find(const std::string &id) const noexcept
 
 pp_result::macro_invocation::
 macro_invocation(const macro &m,
-		 const raw_pp_tokens_range &invocation_range)
-  : _invocation_range{invocation_range}
+		 const raw_pp_tokens_range &invocation_range,
+		 const std::size_t src_length)
+  : _invocation_range{invocation_range},
+    _expansion_forest(m, invocation_range.begin, src_length)
 {
   _used_macros += m;
 }
@@ -417,6 +419,135 @@ _add_emerged_tok(const pp_token_index tok)
 
   _emerged_tokens.insert(it_emerged_tok, tok);
 }
+
+
+using expansion_forest=
+  pp_result::macro_invocation::expansion_forest;
+
+expansion_forest::_forest_nodes::_forest_nodes(const macro &m,
+					       const std::size_t src_begin,
+					       const std::size_t src_length)
+{
+  // Add initial root node.
+  add_rescan_invocation(size_type::invalid(), m, src_begin, src_length);
+}
+
+expansion_forest::_rescan_macro_invocation&
+expansion_forest::_forest_nodes::operator[](const size_type n) noexcept
+{
+  assert(n._n <= _nodes.size());
+  return _nodes[n._n];
+}
+
+const expansion_forest::_rescan_macro_invocation&
+expansion_forest::_forest_nodes::operator[](const size_type n)
+  const noexcept
+{
+  assert(n._n <= _nodes.size());
+  return _nodes[n._n];
+}
+
+expansion_forest::_forest_nodes::size_type expansion_forest::_forest_nodes::
+add_rescan_invocation(const _forest_nodes::size_type rescan_parent,
+		      const macro &m,
+		      const std::size_t src_begin,
+		      const std::size_t src_length)
+{
+  assert(_nodes.empty() ||
+	 (rescan_parent != size_type::invalid() &&
+	  rescan_parent._n < _nodes.size()));
+  assert(_nodes.empty() ||
+	 (*this)[rescan_parent].out_length() > src_begin);
+  _nodes.emplace_back(_rescan_macro_invocation{
+      rescan_parent, m, src_begin, src_length
+    });
+  return size_type{_nodes.size() - 1};
+}
+
+expansion_forest::_forest_nodes::size_type expansion_forest::_forest_nodes::
+add_macro_arg_tree(const _forest_nodes::size_type owner,
+		   const std::size_t src_begin,
+		   const std::size_t src_length)
+{
+  assert(owner != size_type::invalid() && owner._n < _nodes.size());
+  assert((*this)[owner].src_begin() <= src_begin);
+  assert((*this)[owner].src_begin() + (*this)[owner].src_length() >=
+	 src_begin + src_length);
+  assert(!(*this)[owner].out_length());
+  _nodes.emplace_back(_rescan_macro_invocation{src_begin, src_length});
+  ++(*this)[owner]._nargs;
+  return size_type{_nodes.size() - 1};
+}
+
+
+expansion_forest::_rescan_macro_invocation::
+_rescan_macro_invocation
+(const _forest_nodes::size_type rescan_parent, const macro &m,
+ const std::size_t src_begin, const std::size_t src_length)
+  : _rescan_parent(rescan_parent), _nargs(0),
+    _src_begin(src_begin), _src_length(src_length),
+    _out_length(0), _m(&m)
+{}
+
+expansion_forest::_rescan_macro_invocation::
+_rescan_macro_invocation(const std::size_t src_begin,
+			 const std::size_t src_length)
+  : _rescan_parent(_forest_nodes::size_type::invalid()), _nargs(0),
+    _src_begin(src_begin), _src_length(src_length),
+    _out_length(src_length), _m(nullptr)
+{}
+
+bool expansion_forest::_rescan_macro_invocation::
+is_rescan_tree_root() const noexcept
+{
+  return _rescan_parent == _forest_nodes::size_type::invalid();
+}
+
+bool expansion_forest::_rescan_macro_invocation::is_arg_tree_root()
+  const noexcept
+{
+  assert(_m || is_rescan_tree_root());
+  return !_m;
+}
+
+expansion_forest::_forest_nodes::size_type
+expansion_forest::_rescan_macro_invocation::get_rescan_parent() const noexcept
+{
+  return _rescan_parent;
+}
+
+const pp_result::macro& expansion_forest::_rescan_macro_invocation::
+get_macro() const noexcept
+{
+  assert(_m);
+  return *_m;
+}
+
+
+expansion_forest::_rescan_macro_invocation_ref::
+_rescan_macro_invocation_ref(const _forest_nodes &forest,
+			     const _forest_nodes::size_type node) noexcept
+  : _forest(forest), _node(node)
+{}
+
+bool expansion_forest::_rescan_macro_invocation_ref::
+operator==(const _rescan_macro_invocation_ref &rhs)
+  const noexcept
+{
+  return &_forest.get() == &rhs._forest.get() && _node == rhs._node;
+}
+
+const expansion_forest::_rescan_macro_invocation&
+expansion_forest::_rescan_macro_invocation_ref::deref() const noexcept
+{
+  return _forest.get()[_node];
+}
+
+expansion_forest::expansion_forest(const macro &m,
+				   const std::size_t src_begin,
+				   const std::size_t src_length)
+  : _forest(m, src_begin, src_length)
+{}
 
 
 pp_result::inclusion_node::inclusion_node()
@@ -1570,11 +1701,12 @@ void pp_result::_add_macro_undef(const std::string &name,
 
 pp_result::macro_invocation& pp_result::
 _add_macro_invocation(const macro &m,
-		      const raw_pp_tokens_range &invocation_range)
+		      const raw_pp_tokens_range &invocation_range,
+		      const std::size_t src_length)
 {
   _macro_invocations.push_back
     (std::unique_ptr<macro_invocation>
-	{new macro_invocation{m, invocation_range}});
+	{new macro_invocation{m, invocation_range, src_length}});
   return *_macro_invocations.back();
 }
 
