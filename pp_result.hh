@@ -674,6 +674,53 @@ namespace klp
 	    add_macro_arg_tree(const _forest_nodes::size_type owner,
 			       const std::size_t src_begin,
 			       const std::size_t src_length);
+
+	    const size_type first_arg_of(const size_type node)
+	      const noexcept;
+
+	    const size_type next_arg(const size_type prev_arg_root)
+	      const noexcept;
+
+	    const size_type arg_owner(const size_type arg_root) const noexcept;
+
+	    const size_type rescan_tree_root(const size_type descendant_node)
+	      const noexcept;
+
+	    const size_type
+	    next_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+					     const size_type prev_node)
+	      const noexcept;
+
+	    const size_type
+	    prev_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+					     const size_type next_node)
+	      const noexcept;
+
+	    const size_type
+	    last_rescan_subtree_dfs_pre_node(const size_type root_node)
+	      const noexcept;
+
+	  private:
+	    const size_type
+	    _next_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+					      const size_type prev_node)
+	      const noexcept;
+
+	    const size_type
+	    _prev_rescan_subtree_dfs_pre_node(const size_type next_node)
+	      const noexcept;
+
+	    const size_type
+	    _last_rescan_subtree_dfs_pre_node(const size_type subtree_root)
+	      const noexcept;
+
+	    const size_type
+	    __last_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+					       const size_type subtree_end)
+	      const noexcept;
+
+	    const size_type _rescan_subtree_end(const size_type subtree_root)
+	      const noexcept;
 	  }; // class _forest_nodes
 
 	  class _rescan_macro_invocation

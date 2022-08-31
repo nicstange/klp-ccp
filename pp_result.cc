@@ -447,6 +447,7 @@ expansion_forest::_forest_nodes::operator[](const size_type n)
   return _nodes[n._n];
 }
 
+
 expansion_forest::_forest_nodes::size_type expansion_forest::_forest_nodes::
 add_rescan_invocation(const _forest_nodes::size_type rescan_parent,
 		      const macro &m,
@@ -477,6 +478,211 @@ add_macro_arg_tree(const _forest_nodes::size_type owner,
   _nodes.emplace_back(_rescan_macro_invocation{src_begin, src_length});
   ++(*this)[owner]._nargs;
   return size_type{_nodes.size() - 1};
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::first_arg_of(const size_type node)
+  const noexcept
+{
+  assert((*this)[node].nargs() > 0);
+  assert(node._n != _nodes.size());
+  const size_type arg_root{node._n + 1};
+  assert((*this)[arg_root].is_rescan_tree_root());
+
+  return arg_root;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::next_arg(const size_type prev_arg_root)
+  const noexcept
+{
+  assert(prev_arg_root != size_type::invalid() &&
+	 prev_arg_root._n > 0 && prev_arg_root._n < _nodes.size());
+  assert((*this)[prev_arg_root].is_rescan_tree_root());
+  const size_type next_arg_root = _rescan_subtree_end(prev_arg_root);
+  assert(next_arg_root._n != _nodes.size());
+  assert((*this)[next_arg_root].is_rescan_tree_root());
+
+  return next_arg_root;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::arg_owner(const size_type arg_root)
+  const noexcept
+{
+  assert(arg_root != size_type::invalid() &&
+	 arg_root._n > 0 && arg_root._n < _nodes.size());
+  assert((*this)[arg_root].is_rescan_tree_root());
+  _container_type::size_type pending_arg_roots = 1;
+  _container_type::const_iterator it;
+
+  it = _nodes.cbegin() + arg_root._n;
+  while (it != _nodes.cbegin()) {
+    const _container_type::const_iterator nit = it - 1;
+
+    if (nit->nargs() >= pending_arg_roots)
+      break;
+
+    pending_arg_roots -= nit->nargs();
+    pending_arg_roots += nit->is_rescan_tree_root();
+
+    it = nit;
+  }
+  assert(it != _nodes.cbegin());
+
+  return size_type{
+    static_cast<_container_type::size_type>(it - 1 - _nodes.cbegin())
+  };
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+rescan_tree_root(const size_type descendant_node) const noexcept
+{
+  assert(descendant_node != size_type::invalid());
+  size_type node = descendant_node;
+
+  while (!(*this)[node].is_rescan_tree_root())
+    node = (*this)[node].get_rescan_parent();
+
+  return node;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+next_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+				 const size_type prev_node) const noexcept
+{
+  const size_type next_node =
+    _next_rescan_subtree_dfs_pre_node(subtree_root, prev_node);
+
+  assert(next_node == size_type::invalid() ||
+	 _prev_rescan_subtree_dfs_pre_node(next_node) == prev_node);
+  return next_node;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+prev_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+				 const size_type next_node) const noexcept
+{
+  const size_type prev_node = _prev_rescan_subtree_dfs_pre_node(next_node);
+
+  assert(prev_node == size_type::invalid() ||
+	 (_next_rescan_subtree_dfs_pre_node(subtree_root, prev_node) ==
+	  next_node));
+  return prev_node;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+last_rescan_subtree_dfs_pre_node(const size_type root_node)
+  const noexcept
+{
+  return _last_rescan_subtree_dfs_pre_node(root_node);
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+_next_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+				  const size_type prev_node) const noexcept
+{
+  assert(subtree_root._n < _nodes.size());
+  assert(prev_node != size_type::invalid());
+
+  _container_type::const_iterator it;
+  for (it = _nodes.cbegin() + prev_node._n + 1; it != _nodes.cend(); ++it) {
+    const auto node_parent = it->get_rescan_parent();
+    if (node_parent != size_type::invalid() && node_parent._n <= prev_node._n) {
+      if (node_parent._n < subtree_root._n)
+	return size_type::invalid();
+      break;
+    }
+  }
+  if (it == _nodes.cend())
+    return size_type::invalid();
+
+  return size_type{
+    static_cast<_container_type::size_type>(it - _nodes.cbegin())
+  };
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+_prev_rescan_subtree_dfs_pre_node(const size_type next_node) const noexcept
+{
+  const size_type next_node_parent = (*this)[next_node].get_rescan_parent();
+  return __last_rescan_subtree_dfs_pre_node(next_node_parent, next_node);
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+_last_rescan_subtree_dfs_pre_node(const size_type subtree_root)
+  const noexcept
+{
+  return __last_rescan_subtree_dfs_pre_node(subtree_root,
+					    _rescan_subtree_end(subtree_root));
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+__last_rescan_subtree_dfs_pre_node(const size_type subtree_root,
+				   const size_type subtree_end)
+  const noexcept
+{
+  assert(subtree_end._n <= _nodes.size());
+  assert(subtree_end._n > subtree_root._n);
+  size_type node = size_type{subtree_end._n - 1};
+  size_type node_ancestor_or_self = node;
+  while (node_ancestor_or_self._n != 0 &&
+	 node_ancestor_or_self != subtree_root) {
+    if ((*this)[node_ancestor_or_self].is_rescan_tree_root()) {
+      assert(node_ancestor_or_self._n > 0);
+      node = size_type{node_ancestor_or_self._n - 1};
+      node_ancestor_or_self = node;
+    } else {
+      node_ancestor_or_self =
+	(*this)[node_ancestor_or_self].get_rescan_parent();
+    }
+  }
+
+  return node;
+}
+
+const expansion_forest::_forest_nodes::size_type
+expansion_forest::_forest_nodes::
+_rescan_subtree_end(const size_type subtree_root) const noexcept
+{
+  assert(subtree_root._n < _nodes.size());
+  // Find the position right after the last node from the subtree
+  // located at subtree_root or from any of the argument trees
+  // (recursively) referenced therefrom.
+  // Optimization for the case subtree_root refer's to the initial
+  // rescan_tree's root.
+  if (!subtree_root._n)
+    return size_type{_nodes.size()};
+
+  _container_type::size_type skip_arg_roots = (*this)[subtree_root].nargs();
+  _container_type::const_iterator it;
+  for (it = _nodes.cbegin() + subtree_root._n + 1; it != _nodes.cend(); ++it) {
+    const bool is_arg_root = it->is_rescan_tree_root();
+
+    // Per the DFS pre serialization order, subtree_root's (rescan
+    // tree) next sibling, if any, will have its parent located before
+    // subtree_root.
+    if (!skip_arg_roots &&
+	(is_arg_root || it->get_rescan_parent()._n < subtree_root._n)) {
+      break;
+    }
+    assert(is_arg_root || it->get_rescan_parent()._n >= subtree_root._n);
+
+    skip_arg_roots -= is_arg_root;
+    skip_arg_roots += it->nargs();
+  }
+
+  return size_type{
+    static_cast<_container_type::size_type>(it - _nodes.cbegin())
+  };
 }
 
 
