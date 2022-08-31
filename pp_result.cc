@@ -1391,6 +1391,130 @@ expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator--(int)
 }
 
 
+expansion_forest::rescan_subtree::const_final_out_iterator::
+const_final_out_iterator() noexcept
+  : _forest(nullptr),
+    _subtree_root(_forest_nodes::size_type::invalid()),
+    _stack_top_node(_forest_nodes::size_type::invalid()),
+    _next_dfs_pre_node(_forest_nodes::size_type::invalid())
+{}
+
+expansion_forest::rescan_subtree::const_final_out_iterator::
+const_final_out_iterator(const _rescan_macro_invocation_ref &subtree_root,
+			 const _begin_tag&)
+  : _forest(&subtree_root.get_forest()), _subtree_root(subtree_root.get_node()),
+    _stack_top_node(_subtree_root),
+    _next_dfs_pre_node(
+       _forest->next_rescan_subtree_dfs_pre_node(_subtree_root, _stack_top_node)
+    )
+{
+  _consumed_out_lengths_stack.push(0);
+  _enter_branch_at_pos();
+}
+
+expansion_forest::rescan_subtree::const_final_out_iterator::
+const_final_out_iterator(const _rescan_macro_invocation_ref &subtree_root,
+			 const _end_tag&)
+  : _forest(&subtree_root.get_forest()), _subtree_root(subtree_root.get_node()),
+    _stack_top_node(_forest_nodes::size_type::invalid()),
+    _next_dfs_pre_node(_forest_nodes::size_type::invalid())
+{}
+
+bool expansion_forest::rescan_subtree::const_final_out_iterator::
+operator==(const const_final_out_iterator &rhs) const noexcept
+{
+  assert(this->_forest == rhs._forest);
+  assert(this->_subtree_root == rhs._subtree_root);
+
+  const bool equal = (this->_stack_top_node == rhs._stack_top_node &&
+		      this->_next_dfs_pre_node == rhs._next_dfs_pre_node);
+  assert(!equal ||
+	 this->_consumed_out_lengths_stack == rhs._consumed_out_lengths_stack);
+
+  return equal;
+}
+
+expansion_forest::rescan_subtree::const_final_out_iterator::reference
+expansion_forest::rescan_subtree::const_final_out_iterator::operator*()
+  const noexcept
+{
+  return rescan_output_segment{
+    _rescan_macro_invocation_ref{*_forest, _stack_top_node},
+    _consumed_out_lengths_stack.top(), _cur_out_segment_length()
+  };
+}
+
+expansion_forest::rescan_subtree::const_final_out_iterator&
+expansion_forest::rescan_subtree::const_final_out_iterator::operator++()
+{
+  std::size_t accumulated_src_length = 0;
+
+  assert(!_consumed_out_lengths_stack.empty());
+  _consumed_out_lengths_stack.top() += _cur_out_segment_length();
+  while(((*_forest)[_stack_top_node].out_length() ==
+	 _consumed_out_lengths_stack.top())) {
+    const _rescan_macro_invocation &child = (*_forest)[_stack_top_node];
+    accumulated_src_length += child.src_length();
+    _consumed_out_lengths_stack.pop();
+    _stack_top_node = child.get_rescan_parent();
+    assert(_consumed_out_lengths_stack.empty() ==
+	   (_stack_top_node == _forest_nodes::size_type::invalid()));
+    if (_consumed_out_lengths_stack.empty()) {
+      assert(_next_dfs_pre_node == _forest_nodes::size_type::invalid());
+      return *this;
+    }
+
+    const _rescan_macro_invocation &parent = (*_forest)[_stack_top_node];
+    const std::size_t consumed_from_parent =
+      std::min(accumulated_src_length,
+	       parent.out_length() - _consumed_out_lengths_stack.top());
+    accumulated_src_length -= consumed_from_parent;
+    _consumed_out_lengths_stack.top() += consumed_from_parent;
+  }
+
+  assert(!_consumed_out_lengths_stack.empty());
+  assert(!accumulated_src_length);
+
+  _enter_branch_at_pos();
+
+  return *this;
+}
+
+std::size_t expansion_forest::rescan_subtree::const_final_out_iterator::
+_cur_out_segment_length() const noexcept
+{
+  std::size_t out_segment_end;
+  if (_next_dfs_pre_node == _forest_nodes::size_type::invalid() ||
+      (*_forest)[_next_dfs_pre_node].get_rescan_parent() != _stack_top_node) {
+    out_segment_end = (*_forest)[_stack_top_node].out_length();
+  } else {
+    out_segment_end = (*_forest)[_next_dfs_pre_node].src_begin();
+  }
+
+  assert(out_segment_end > _consumed_out_lengths_stack.top()
+	 || (out_segment_end == 0 && _consumed_out_lengths_stack.top() == 0));
+  return out_segment_end - _consumed_out_lengths_stack.top();
+}
+
+void expansion_forest::rescan_subtree::const_final_out_iterator::
+_enter_branch_at_pos()
+{
+  while(_next_dfs_pre_node != _forest_nodes::size_type::invalid()) {
+    const _rescan_macro_invocation &next = (*_forest)[_next_dfs_pre_node];
+
+    if (next.get_rescan_parent() != _stack_top_node ||
+	next.src_begin() != _consumed_out_lengths_stack.top()) {
+      break;
+    }
+
+    _consumed_out_lengths_stack.push(0);
+    _stack_top_node = _next_dfs_pre_node;
+    _next_dfs_pre_node =
+      _forest->next_rescan_subtree_dfs_pre_node(_subtree_root, _stack_top_node);
+  }
+}
+
+
 expansion_forest::rescan_subtree::
 rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
   : _subtree_root(subtree_root)
@@ -1409,6 +1533,22 @@ expansion_forest::rescan_subtree::end() const noexcept
 {
   return const_dfs_pre_iterator{
     _subtree_root, const_dfs_pre_iterator::_end_tag{}
+  };
+}
+
+expansion_forest::rescan_subtree::const_final_out_iterator
+expansion_forest::rescan_subtree::final_out_begin() const
+{
+  return const_final_out_iterator{
+    _subtree_root, const_final_out_iterator::_begin_tag{}
+  };
+}
+
+expansion_forest::rescan_subtree::const_final_out_iterator
+expansion_forest::rescan_subtree::final_out_end() const
+{
+  return const_final_out_iterator{
+    _subtree_root, const_final_out_iterator::_end_tag{}
   };
 }
 
