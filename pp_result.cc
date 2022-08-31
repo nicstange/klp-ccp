@@ -686,374 +686,6 @@ _rescan_subtree_end(const size_type subtree_root) const noexcept
 }
 
 
-expansion_forest::_rescan_macro_invocation::output::fragment::repl_ref::
-repl_ref() noexcept
-  : _begin(std::numeric_limits<std::size_t>::max()), _length(0)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::repl_ref::
-repl_ref(const std::size_t begin) noexcept
-  : _begin(begin), _length(1)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::repl_ref::
-repl_ref(const std::size_t begin, const std::size_t length) noexcept
-  : _begin(begin), _length(length)
-{}
-
-void expansion_forest::_rescan_macro_invocation::output::fragment::repl_ref::
-_extend(const std::size_t tail_begin) noexcept
-{
-  assert(_begin + _length == tail_begin);
-  ++_length;
-}
-
-
-expansion_forest::_rescan_macro_invocation::output::fragment::arg_ref::
-arg_ref(const std::size_t arg_index) noexcept
-  : _arg_index(arg_index)
-{}
-
-
-expansion_forest::_rescan_macro_invocation::output::fragment::stringification::
-stringification(const arg_ref &arg) noexcept
-  : _arg(arg)
-{}
-
-
-expansion_forest::_rescan_macro_invocation::output::fragment::concat_sequence::
-component::component(repl_ref &&repl, const repl_tag&) noexcept
-  : _op(op::repl), _repl(std::move(repl))
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::concat_sequence::
-component::component(repl_ref &&repl, arg_ref &&arg, const arg_tag&) noexcept
-  : _op(op::arg), _repl(std::move(repl)), _arg(std::move(arg))
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::concat_sequence::
-component::component(repl_ref &&repl, stringification &&s,
-		     const stringification_tag&) noexcept
-  : _op(op::stringification), _repl(std::move(repl)),
-    _stringification(std::move(s))
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::concat_sequence::
-component::component(repl_ref &&repl, const bool skipped,
-		     const conditional_comma_tag&) noexcept
-  : _op(op::conditional_comma), _repl(std::move(repl)),
-    _conditional_comma_skipped(skipped)
-{}
-
-
-void
-expansion_forest::_rescan_macro_invocation::output::fragment::concat_sequence::
-_extend(component &&c)
-{
-  _components.emplace_back(std::move(c));
-}
-
-
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder::
-_concat_builder(fragment &frag) noexcept
-  : _frag(frag)
-{
-  assert(_frag.get()._op == op::concat);
-}
-
-void
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder::
-add_component(const std::size_t repl_begin, const repl_tag&)
-{
-  auto &frag = _frag.get();
-  auto &c = frag._concat_sequence;
-
-  c._extend(concat_sequence::component{
-      repl_ref{repl_begin}, repl_tag{}
-    });
-
-  if (!frag._out_length)
-    frag._out_length = 1;
-
-  frag._repl._length = repl_begin + 1 - frag._repl._begin;
-}
-
-void
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder::
-add_component(const std::size_t repl_begin, const std::size_t arg_index,
-	      const std::size_t arg_length, const arg_tag&)
-{
-  auto &frag = _frag.get();
-  auto &c = frag._concat_sequence;
-
-  c._extend(concat_sequence::component{
-      repl_ref{repl_begin}, arg_ref{arg_index}, arg_tag{}
-    });
-
-  if (arg_length) {
-    if (!frag._out_length)
-      frag._out_length = 1;
-
-    frag._out_length += arg_length - 1;
-  }
-
-  frag._repl._length = repl_begin + 1 - frag._repl._begin;
-}
-
-void
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder::
-add_component(const std::size_t repl_begin, const std::size_t repl_end,
-	      const std::size_t arg_index, const stringification_tag&) noexcept
-{
-  auto &frag = _frag.get();
-  auto &c = frag._concat_sequence;
-
-  c._extend(concat_sequence::component{
-      repl_ref{repl_begin, repl_end - repl_begin},
-      stringification{arg_ref{arg_index}}, stringification_tag{}
-    });
-
-  if (!frag._out_length)
-    frag._out_length = 1;
-
-  frag._repl._length = repl_end - frag._repl._begin;
-}
-
-void
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder::
-add_component(const std::size_t repl_begin, const std::size_t repl_end,
-	      const bool skipped, const conditional_comma_tag&) noexcept
-{
-  auto &frag = _frag.get();
-  auto &c = frag._concat_sequence;
-
-  c._extend(concat_sequence::component{
-      repl_ref{repl_begin, repl_end - repl_begin}, skipped,
-      conditional_comma_tag{}
-    });
-
-  if (!frag._out_length && !skipped)
-    frag._out_length = 1;
-
-  frag._repl._length = repl_end - frag._repl._begin;
-}
-
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t repl_begin, const std::size_t out_begin,
-	 const repl_tag&)
-  : _op(op::repl), _out_begin(out_begin), _out_length(1),
-    _repl(repl_begin)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t arg_ref_repl_pos,
-	 const std::size_t out_begin, const std::size_t out_length,
-	 const std::size_t arg_index, const arg_tag&)
-  : _op(op::arg), _out_begin(out_begin), _out_length(out_length),
-    _repl(arg_ref_repl_pos), _arg(arg_index)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t repl_begin, const std::size_t repl_length,
-	 const std::size_t out_begin, const std::size_t arg_index,
-	 const stringification_tag&)
-  : _op(op::stringification), _out_begin(out_begin), _out_length(1),
-    _repl(repl_begin, repl_length), _stringification(arg_ref{arg_index})
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t repl_begin, const std::size_t out_begin,
-	 const concat_tag&)
-  : _op(op::concat), _out_begin(out_begin), _out_length(0),
-    _repl(repl_begin), _concat_sequence{}
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t repl_begin, const std::size_t repl_length,
-	 const std::size_t out_begin, const bool skipped,
-	 const conditional_comma_tag&)
-  : _op(op::conditional_comma), _out_begin(out_begin), _out_length(!skipped),
-    _repl(repl_begin, repl_length)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t out_begin, const empty_tag&)
-  : _op(op::empty), _out_begin(out_begin), _out_length(1)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(const std::size_t out_begin, const std::size_t out_length,
-	 const builtin_special_tag&)
-  : _op(op::builtin_special), _out_begin(out_begin), _out_length(out_length)
-{}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-fragment(fragment &&seg)
-  : _op(seg._op), _out_begin(seg._out_begin), _out_length(seg._out_length),
-    _repl(seg._repl)
-{
-  switch (_op) {
-  case op::repl:
-    break;
-
-  case op::arg:
-    new (&_arg) arg_ref(std::move(seg._arg));
-    break;
-
-  case op::stringification:
-    new (&_stringification) stringification(std::move(seg._stringification));
-    break;
-
-  case op::concat:
-    new (&_concat_sequence) concat_sequence(std::move(seg._concat_sequence));
-    break;
-
-  case op::conditional_comma:
-    break;
-
-  case op::empty:
-    break;
-
-  case op::builtin_special:
-    break;
-  }
-}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::
-~fragment() noexcept
-{
-  switch (_op) {
-  case op::repl:
-    break;
-
-  case op::arg:
-    _arg.~arg_ref();
-    break;
-
-  case op::stringification:
-    _stringification.~stringification();
-    break;
-
-  case op::concat:
-    _concat_sequence.~concat_sequence();
-    break;
-
-  case op::conditional_comma:
-    break;
-
-  case op::empty:
-    break;
-
-  case op::builtin_special:
-    break;
-  }
-}
-
-
-
-expansion_forest::_rescan_macro_invocation::output::output() noexcept
-  = default;
-
-expansion_forest::_rescan_macro_invocation::output::output(output &&) noexcept
-  = default;
-
-expansion_forest::_rescan_macro_invocation::output::~output() noexcept
-  = default;
-
-std::size_t expansion_forest::_rescan_macro_invocation::output::out_length()
-  const noexcept
-{
-  return _next_fragment_out_begin();
-}
-
-std::size_t
-expansion_forest::_rescan_macro_invocation::output::_next_fragment_out_begin()
-  const noexcept
-{
-  if (_fragments.empty())
-    return 0;
-
-  const auto &last = _fragments.back();
-  return last._out_begin + last._out_length;
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t repl_begin, const fragment::repl_tag&)
-{
-  // If the last fragment added had been of type op::repl already, extend it.
-  if (!_fragments.empty() && _fragments.back()._op == fragment::op::repl) {
-    auto &last = _fragments.back();
-    assert(last._repl.begin() + last._repl.length() == repl_begin);
-    ++last._repl._length;
-    ++last._out_length;
-    return;
-  }
-
-  _fragments.emplace_back(fragment{
-      repl_begin, _next_fragment_out_begin(), fragment::repl_tag{}
-    });
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t arg_ref_repl_pos, const std::size_t arg_index,
-	      const std::size_t out_length, const fragment::arg_tag&)
-{
-  _fragments.emplace_back(fragment{
-      arg_ref_repl_pos, _next_fragment_out_begin(), out_length, arg_index,
-      fragment::arg_tag{}
-    });
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t repl_begin, const std::size_t repl_end,
-	      const std::size_t arg_index, const fragment::stringification_tag&)
-{
-  _fragments.emplace_back(fragment{
-      repl_begin, repl_end - repl_begin, _next_fragment_out_begin(), arg_index,
-      fragment::stringification_tag{}
-    });
-}
-
-expansion_forest::_rescan_macro_invocation::output::fragment::_concat_builder
-expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t repl_begin, const fragment::concat_tag&)
-{
-  _fragments.emplace_back(fragment{
-      repl_begin, _next_fragment_out_begin(), fragment::concat_tag{}
-    });
-  return fragment::_concat_builder{_fragments.back()};
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t repl_begin, const std::size_t repl_end,
-	     const bool skipped,
-	     const fragment::conditional_comma_tag&)
-{
-  _fragments.emplace_back(fragment{
-      repl_begin, repl_end - repl_begin, _next_fragment_out_begin(), skipped,
-      fragment::conditional_comma_tag{}
-    });
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const fragment::empty_tag&)
-{
-  _fragments.emplace_back(fragment{
-      _next_fragment_out_begin(), fragment::empty_tag{}
-    });
-}
-
-void expansion_forest::_rescan_macro_invocation::output::
-_add_fragment(const std::size_t out_length,
-	      const fragment::builtin_special_tag&)
-{
-  _fragments.emplace_back(fragment{
-      _next_fragment_out_begin(), out_length, fragment::builtin_special_tag{}
-    });
-}
-
-
 expansion_forest::_rescan_macro_invocation::
 _rescan_macro_invocation
 (const _forest_nodes::size_type rescan_parent, const macro &m,
@@ -1132,6 +764,32 @@ expansion_forest::expansion_forest(const macro &m,
 {}
 
 
+expansion_forest::rescan_output_segment::
+rescan_output_segment(const _rescan_macro_invocation_ref &emitting_node,
+		      const std::size_t begin,
+		      const std::size_t length) noexcept
+  : _emitting_node(emitting_node), _begin(begin),
+    _length(length)
+{}
+
+
+expansion_forest::rescan_macro_invocation::
+rescan_macro_invocation(const _rescan_macro_invocation_ref &ref) noexcept
+  : _ref(ref)
+{}
+
+bool expansion_forest::rescan_macro_invocation::
+operator==(const rescan_macro_invocation &rhs) const noexcept
+{
+  return _ref == rhs._ref;
+}
+
+expansion_forest::rescan_subtree::
+rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
+  : _subtree_root(subtree_root)
+{}
+
+
 pp_result::inclusion_node::inclusion_node()
   : _parent(nullptr)
 {}
@@ -1147,6 +805,374 @@ pp_result::inclusion_node::recursive_header_inclusion_iterator
 pp_result::inclusion_node::header_inclusions_recursive_begin() const
 {
   return recursive_header_inclusion_iterator{_recursive_child_iterator{*this}};
+}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
+repl_ref() noexcept
+  : _begin(std::numeric_limits<std::size_t>::max()), _length(0)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
+repl_ref(const std::size_t begin) noexcept
+  : _begin(begin), _length(1)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
+repl_ref(const std::size_t begin, const std::size_t length) noexcept
+  : _begin(begin), _length(length)
+{}
+
+void expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
+_extend(const std::size_t tail_begin) noexcept
+{
+  assert(_begin + _length == tail_begin);
+  ++_length;
+}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::arg_ref::
+arg_ref(const std::size_t arg_index) noexcept
+  : _arg_index(arg_index)
+{}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::stringification::
+stringification(const arg_ref &arg) noexcept
+  : _arg(arg)
+{}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+component::component(repl_ref &&repl, const repl_tag&) noexcept
+  : _op(op::repl), _repl(std::move(repl))
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+component::component(repl_ref &&repl, arg_ref &&arg, const arg_tag&) noexcept
+  : _op(op::arg), _repl(std::move(repl)), _arg(std::move(arg))
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+component::component(repl_ref &&repl, stringification &&s,
+		     const stringification_tag&) noexcept
+  : _op(op::stringification), _repl(std::move(repl)),
+    _stringification(std::move(s))
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+component::component(repl_ref &&repl, const bool skipped,
+		     const conditional_comma_tag&) noexcept
+  : _op(op::conditional_comma), _repl(std::move(repl)),
+    _conditional_comma_skipped(skipped)
+{}
+
+
+void
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+_extend(component &&c)
+{
+  _components.emplace_back(std::move(c));
+}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder::
+_concat_builder(fragment &frag) noexcept
+  : _frag(frag)
+{
+  assert(_frag.get()._op == op::concat);
+}
+
+void
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder::
+add_component(const std::size_t repl_begin, const repl_tag&)
+{
+  auto &frag = _frag.get();
+  auto &c = frag._concat_sequence;
+
+  c._extend(concat_sequence::component{
+      repl_ref{repl_begin}, repl_tag{}
+    });
+
+  if (!frag._out_length)
+    frag._out_length = 1;
+
+  frag._repl._length = repl_begin + 1 - frag._repl._begin;
+}
+
+void
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder::
+add_component(const std::size_t repl_begin, const std::size_t arg_index,
+	      const std::size_t arg_length, const arg_tag&)
+{
+  auto &frag = _frag.get();
+  auto &c = frag._concat_sequence;
+
+  c._extend(concat_sequence::component{
+      repl_ref{repl_begin}, arg_ref{arg_index}, arg_tag{}
+    });
+
+  if (arg_length) {
+    if (!frag._out_length)
+      frag._out_length = 1;
+
+    frag._out_length += arg_length - 1;
+  }
+
+  frag._repl._length = repl_begin + 1 - frag._repl._begin;
+}
+
+void
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder::
+add_component(const std::size_t repl_begin, const std::size_t repl_end,
+	      const std::size_t arg_index, const stringification_tag&) noexcept
+{
+  auto &frag = _frag.get();
+  auto &c = frag._concat_sequence;
+
+  c._extend(concat_sequence::component{
+      repl_ref{repl_begin, repl_end - repl_begin},
+      stringification{arg_ref{arg_index}}, stringification_tag{}
+    });
+
+  if (!frag._out_length)
+    frag._out_length = 1;
+
+  frag._repl._length = repl_end - frag._repl._begin;
+}
+
+void
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder::
+add_component(const std::size_t repl_begin, const std::size_t repl_end,
+	      const bool skipped, const conditional_comma_tag&) noexcept
+{
+  auto &frag = _frag.get();
+  auto &c = frag._concat_sequence;
+
+  c._extend(concat_sequence::component{
+      repl_ref{repl_begin, repl_end - repl_begin}, skipped,
+      conditional_comma_tag{}
+    });
+
+  if (!frag._out_length && !skipped)
+    frag._out_length = 1;
+
+  frag._repl._length = repl_end - frag._repl._begin;
+}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t repl_begin, const std::size_t out_begin,
+	 const repl_tag&)
+  : _op(op::repl), _out_begin(out_begin), _out_length(1),
+    _repl(repl_begin)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t arg_ref_repl_pos,
+	 const std::size_t out_begin, const std::size_t out_length,
+	 const std::size_t arg_index, const arg_tag&)
+  : _op(op::arg), _out_begin(out_begin), _out_length(out_length),
+    _repl(arg_ref_repl_pos), _arg(arg_index)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t repl_begin, const std::size_t repl_length,
+	 const std::size_t out_begin, const std::size_t arg_index,
+	 const stringification_tag&)
+  : _op(op::stringification), _out_begin(out_begin), _out_length(1),
+    _repl(repl_begin, repl_length), _stringification(arg_ref{arg_index})
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t repl_begin, const std::size_t out_begin,
+	 const concat_tag&)
+  : _op(op::concat), _out_begin(out_begin), _out_length(0),
+    _repl(repl_begin), _concat_sequence{}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t repl_begin, const std::size_t repl_length,
+	 const std::size_t out_begin, const bool skipped,
+	 const conditional_comma_tag&)
+  : _op(op::conditional_comma), _out_begin(out_begin), _out_length(!skipped),
+    _repl(repl_begin, repl_length)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t out_begin, const empty_tag&)
+  : _op(op::empty), _out_begin(out_begin), _out_length(1)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(const std::size_t out_begin, const std::size_t out_length,
+	 const builtin_special_tag&)
+  : _op(op::builtin_special), _out_begin(out_begin), _out_length(out_length)
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+fragment(fragment &&seg)
+  : _op(seg._op), _out_begin(seg._out_begin), _out_length(seg._out_length),
+    _repl(seg._repl)
+{
+  switch (_op) {
+  case op::repl:
+    break;
+
+  case op::arg:
+    new (&_arg) arg_ref(std::move(seg._arg));
+    break;
+
+  case op::stringification:
+    new (&_stringification) stringification(std::move(seg._stringification));
+    break;
+
+  case op::concat:
+    new (&_concat_sequence) concat_sequence(std::move(seg._concat_sequence));
+    break;
+
+  case op::conditional_comma:
+    break;
+
+  case op::empty:
+    break;
+
+  case op::builtin_special:
+    break;
+  }
+}
+
+expansion_forest::rescan_macro_invocation::output::fragment::
+~fragment() noexcept
+{
+  switch (_op) {
+  case op::repl:
+    break;
+
+  case op::arg:
+    _arg.~arg_ref();
+    break;
+
+  case op::stringification:
+    _stringification.~stringification();
+    break;
+
+  case op::concat:
+    _concat_sequence.~concat_sequence();
+    break;
+
+  case op::conditional_comma:
+    break;
+
+  case op::empty:
+    break;
+
+  case op::builtin_special:
+    break;
+  }
+}
+
+
+
+expansion_forest::rescan_macro_invocation::output::output() noexcept
+  = default;
+
+expansion_forest::rescan_macro_invocation::output::output(output &&) noexcept
+  = default;
+
+expansion_forest::rescan_macro_invocation::output::~output() noexcept
+  = default;
+
+std::size_t expansion_forest::rescan_macro_invocation::output::out_length()
+  const noexcept
+{
+  return _next_fragment_out_begin();
+}
+
+std::size_t
+expansion_forest::rescan_macro_invocation::output::_next_fragment_out_begin()
+  const noexcept
+{
+  if (_fragments.empty())
+    return 0;
+
+  const auto &last = _fragments.back();
+  return last._out_begin + last._out_length;
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t repl_begin, const fragment::repl_tag&)
+{
+  // If the last fragment added had been of type op::repl already, extend it.
+  if (!_fragments.empty() && _fragments.back()._op == fragment::op::repl) {
+    auto &last = _fragments.back();
+    assert(last._repl.begin() + last._repl.length() == repl_begin);
+    ++last._repl._length;
+    ++last._out_length;
+    return;
+  }
+
+  _fragments.emplace_back(fragment{
+      repl_begin, _next_fragment_out_begin(), fragment::repl_tag{}
+    });
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t arg_ref_repl_pos, const std::size_t arg_index,
+	      const std::size_t out_length, const fragment::arg_tag&)
+{
+  _fragments.emplace_back(fragment{
+      arg_ref_repl_pos, _next_fragment_out_begin(), out_length, arg_index,
+      fragment::arg_tag{}
+    });
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t repl_begin, const std::size_t repl_end,
+	      const std::size_t arg_index, const fragment::stringification_tag&)
+{
+  _fragments.emplace_back(fragment{
+      repl_begin, repl_end - repl_begin, _next_fragment_out_begin(), arg_index,
+      fragment::stringification_tag{}
+    });
+}
+
+expansion_forest::rescan_macro_invocation::output::fragment::_concat_builder
+expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t repl_begin, const fragment::concat_tag&)
+{
+  _fragments.emplace_back(fragment{
+      repl_begin, _next_fragment_out_begin(), fragment::concat_tag{}
+    });
+  return fragment::_concat_builder{_fragments.back()};
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t repl_begin, const std::size_t repl_end,
+	     const bool skipped,
+	     const fragment::conditional_comma_tag&)
+{
+  _fragments.emplace_back(fragment{
+      repl_begin, repl_end - repl_begin, _next_fragment_out_begin(), skipped,
+      fragment::conditional_comma_tag{}
+    });
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const fragment::empty_tag&)
+{
+  _fragments.emplace_back(fragment{
+      _next_fragment_out_begin(), fragment::empty_tag{}
+    });
+}
+
+void expansion_forest::rescan_macro_invocation::output::
+_add_fragment(const std::size_t out_length,
+	      const fragment::builtin_special_tag&)
+{
+  _fragments.emplace_back(fragment{
+      _next_fragment_out_begin(), out_length, fragment::builtin_special_tag{}
+    });
 }
 
 pp_result::inclusion_node::recursive_header_inclusion_iterator

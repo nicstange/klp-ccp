@@ -1780,7 +1780,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 
   std::vector<_pp_token> result;
   using out_fragment =
-    _macro_expansion_forest::_rescan_macro_invocation::output::fragment;
+    _macro_expansion_forest::rescan_macro_invocation::output::fragment;
   auto &out_fragments = rmi._output;
   // Start the macro expansion with an empty token.
   result.emplace_back(pp_token::type::empty, std::string{}, invocation_range);
@@ -2125,7 +2125,7 @@ _expand_one_builtin_special
   const pp_result::macro &m = rmi.get_macro();
   std::vector<preprocessor::_pp_token> result;
   using out_fragment =
-    _macro_expansion_forest::_rescan_macro_invocation::output::fragment;
+    _macro_expansion_forest::rescan_macro_invocation::output::fragment;
   auto &out_fragments = rmi._output;
 
   if (&m == &_m_defined_op) {

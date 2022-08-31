@@ -723,9 +723,49 @@ namespace klp
 	      const noexcept;
 	  }; // class _forest_nodes
 
-	  class _rescan_macro_invocation
+	  class _rescan_macro_invocation_ref
 	  {
 	  public:
+	    _rescan_macro_invocation_ref(const _forest_nodes &forest,
+					 const _forest_nodes::size_type node)
+	      noexcept;
+
+	    bool operator==(const _rescan_macro_invocation_ref &rhs)
+	      const noexcept;
+
+	    const _forest_nodes& get_forest() const noexcept
+	    { return _forest.get(); }
+
+	    const _forest_nodes::size_type get_node() const noexcept
+	    { return _node; }
+
+	    const _rescan_macro_invocation& deref() const noexcept;
+
+	  private:
+	    std::reference_wrapper<const _forest_nodes> _forest;
+	    _forest_nodes::size_type _node;
+	  }; // class _rescan_macro_invocation_ref;
+
+
+	public:
+	  class rescan_output_segment
+	  {
+	  private:
+	    friend class expansion_forest;
+
+	    rescan_output_segment
+	      (const _rescan_macro_invocation_ref &emitting_node,
+	       const std::size_t begin,
+	       const std::size_t length) noexcept;
+	    _rescan_macro_invocation_ref _emitting_node;
+	    std::size_t _begin;
+	    std::size_t _length;
+	  }; // class rescan_output_segment
+
+	  class rescan_macro_invocation
+	  {
+	  public:
+
 	    class output
 	    {
 	    public:
@@ -983,10 +1023,24 @@ namespace klp
 	      void _add_fragment(const std::size_t out_length,
 				 const fragment::builtin_special_tag&);
 
-	      std::vector<fragment> _fragments;
+	      using _fragments_container_type = std::vector<fragment>;
+
+	      _fragments_container_type _fragments;
 	    }; // class output
 
+	    bool operator==(const rescan_macro_invocation &rhs) const noexcept;
 
+	  private:
+	    rescan_macro_invocation(const _rescan_macro_invocation_ref &ref)
+	      noexcept;
+
+	    _rescan_macro_invocation_ref _ref;
+	  }; // class rescan_macro_invocation
+
+	private:
+	  class _rescan_macro_invocation
+	  {
+	  public:
 	    std::size_t src_begin() const noexcept
 	    { return _src_begin; }
 
@@ -1031,33 +1085,21 @@ namespace klp
 
 	    const macro *_m;
 
-	    output _output;
+	    rescan_macro_invocation::output _output;
 	  }; // class _rescan_macro_invocation
 
-	  class _rescan_macro_invocation_ref
+	public:
+	  class rescan_subtree
 	  {
 	  public:
-	    _rescan_macro_invocation_ref(const _forest_nodes &forest,
-					 const _forest_nodes::size_type node)
-	      noexcept;
-
-	    bool operator==(const _rescan_macro_invocation_ref &rhs)
-	      const noexcept;
-
-	    const _forest_nodes& get_forest() const noexcept
-	    { return _forest.get(); }
-
-	    const _forest_nodes::size_type get_node() const noexcept
-	    { return _node; }
-
-	    const _rescan_macro_invocation& deref() const noexcept;
 
 	  private:
-	    std::reference_wrapper<const _forest_nodes> _forest;
-	    _forest_nodes::size_type _node;
-	  }; // class _rescan_macro_invocation_ref;
+	    rescan_subtree(const _rescan_macro_invocation_ref &subtree_root)
+	      noexcept;
 
-	public:
+	    _rescan_macro_invocation_ref _subtree_root;
+	  }; // class rescan_subtree
+
 	  expansion_forest(const macro &m,
 			   const std::size_t src_begin,
 			   const std::size_t src_length);
