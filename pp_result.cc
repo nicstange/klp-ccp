@@ -1289,10 +1289,128 @@ _add_fragment(const std::size_t out_length,
 }
 
 
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::
+const_dfs_pre_iterator() noexcept
+  : _forest(nullptr), _subtree_root(_forest_nodes::size_type::invalid()),
+    _node(_forest_nodes::size_type::invalid()), _at_end(false)
+{}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::
+const_dfs_pre_iterator(const _rescan_macro_invocation_ref &root,
+		       const _begin_tag&) noexcept
+  : _forest(&root.get_forest()), _subtree_root(root.get_node()),
+    _node(root.get_node()), _at_end(false)
+{}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::
+const_dfs_pre_iterator(const _rescan_macro_invocation_ref &root,
+		       const _end_tag&) noexcept
+  : _forest(&root.get_forest()), _subtree_root(root.get_node()),
+    _node(_forest_nodes::size_type::invalid()), _at_end(true)
+{}
+
+bool
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::
+operator==(const const_dfs_pre_iterator &rhs) const noexcept
+{
+  assert(this->_forest);
+  assert(this->_forest == rhs._forest);
+  assert(this->_subtree_root == rhs._subtree_root);
+
+  if (this->_at_end != rhs._at_end)
+    return false;
+
+  if (this->_at_end)
+    return true;
+
+  return this->_node == rhs._node;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::reference
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator*()
+  const noexcept
+{
+  assert(_forest);
+  assert(!_at_end);
+  return rescan_macro_invocation{
+	   _rescan_macro_invocation_ref{*_forest, _node}
+	 };
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator&
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator++() noexcept
+{
+  const _forest_nodes::size_type next =
+    _forest->next_rescan_subtree_dfs_pre_node(_subtree_root, _node);
+
+  if (next == _forest_nodes::size_type::invalid()) {
+    _at_end = true;
+    return *this;
+  }
+
+  _node = next;
+  return *this;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator++(int)
+  noexcept
+{
+  const const_dfs_pre_iterator i = *this;
+
+  ++*this;
+  return i;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator&
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator--() noexcept
+{
+  if (_at_end) {
+    // A begin() iterator incremented past the tree end will have
+    // _node set to the last DFS pre node and _at_end true. end()
+    // iterators' _node OTOH gets initialized lazily, find that node
+    // now.
+    if (_node == _forest_nodes::size_type::invalid())
+      _node = _forest->last_rescan_subtree_dfs_pre_node(_subtree_root);
+    _at_end = false;
+    return *this;
+  }
+
+  _node = _forest->prev_rescan_subtree_dfs_pre_node(_subtree_root, _node);
+  return *this;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator
+expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator--(int)
+  noexcept
+{
+  const const_dfs_pre_iterator i = *this;
+
+  --*this;
+  return i;
+}
+
+
 expansion_forest::rescan_subtree::
 rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
   : _subtree_root(subtree_root)
 {}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator
+expansion_forest::rescan_subtree::begin() const noexcept
+{
+  return const_dfs_pre_iterator{
+    _subtree_root, const_dfs_pre_iterator::_begin_tag{}
+  };
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_iterator
+expansion_forest::rescan_subtree::end() const noexcept
+{
+  return const_dfs_pre_iterator{
+    _subtree_root, const_dfs_pre_iterator::_end_tag{}
+  };
+}
 
 
 pp_result::inclusion_node::inclusion_node()

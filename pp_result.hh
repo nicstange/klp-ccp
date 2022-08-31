@@ -748,6 +748,8 @@ namespace klp
 
 
 	public:
+	  class rescan_subtree;
+
 	  class rescan_output_segment
 	  {
 	  private:
@@ -1074,6 +1076,8 @@ namespace klp
 	    bool operator==(const rescan_macro_invocation &rhs) const noexcept;
 
 	  private:
+	    friend class rescan_subtree;
+
 	    rescan_macro_invocation(const _rescan_macro_invocation_ref &ref)
 	      noexcept;
 
@@ -1135,6 +1139,48 @@ namespace klp
 	  class rescan_subtree
 	  {
 	  public:
+	    class const_dfs_pre_iterator
+	    {
+	    public:
+	      using iterator_category = std::bidirectional_iterator_tag;
+	      using value_type = const rescan_macro_invocation;
+	      using reference = value_type;
+
+	      const_dfs_pre_iterator() noexcept;
+
+	      bool operator==(const const_dfs_pre_iterator &rhs) const noexcept;
+
+	      bool operator!=(const const_dfs_pre_iterator &rhs) const noexcept
+	      { return !(*this == rhs); }
+
+	      reference operator*() const noexcept;
+
+	      const_dfs_pre_iterator& operator++() noexcept;
+	      const_dfs_pre_iterator operator++(int) noexcept;
+
+	      const_dfs_pre_iterator& operator--() noexcept;
+	      const_dfs_pre_iterator operator--(int) noexcept;
+
+	    private:
+	      friend class rescan_subtree;
+
+	      struct _begin_tag{};
+	      struct _end_tag{};
+
+	      const_dfs_pre_iterator(const _rescan_macro_invocation_ref &root,
+				     const _begin_tag&) noexcept;
+
+	      const_dfs_pre_iterator(const _rescan_macro_invocation_ref &root,
+				     const _end_tag&) noexcept;
+
+	      const _forest_nodes *_forest;
+	      _forest_nodes::size_type _subtree_root;
+	      _forest_nodes::size_type _node;
+	      bool _at_end;
+	    }; // class const_dfs_pre_iterator
+
+	    const_dfs_pre_iterator begin() const noexcept;
+	    const_dfs_pre_iterator end() const noexcept;
 
 	  private:
 	    rescan_subtree(const _rescan_macro_invocation_ref &subtree_root)
