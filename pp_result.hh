@@ -765,6 +765,49 @@ namespace klp
 	  class rescan_macro_invocation
 	  {
 	  public:
+	    class const_src_iterator
+	    {
+	    public:
+	      using iterator_category = std::forward_iterator_tag;
+	      using value_type = const rescan_output_segment;
+	      using reference = value_type;
+
+	      const_src_iterator() noexcept;
+
+	      bool operator==(const const_src_iterator &rhs) const noexcept;
+
+	      bool operator!=(const const_src_iterator &rhs) const noexcept
+	      { return !(*this == rhs); }
+
+	      reference operator*() const noexcept;
+
+	      const_src_iterator& operator++() noexcept;
+	      const_src_iterator operator++(int) noexcept;
+
+	    private:
+	      friend class rescan_macro_invocation;
+
+	      struct _begin_tag{};
+	      struct _end_tag{};
+
+	      const_src_iterator(const _rescan_macro_invocation_ref &node,
+				 const _begin_tag&) noexcept;
+
+	      const_src_iterator(const _rescan_macro_invocation_ref &node,
+				 const _end_tag&) noexcept;
+
+	      void _advance_node_to_emitting() noexcept;
+
+	      std::size_t _cur_src_segment_length() const noexcept;
+
+	      const _forest_nodes *_forest;
+	      _forest_nodes::size_type _node;
+	      std::size_t _remaining_src_length;
+	      std::size_t _src_begin;
+	    }; // class const_src_iterator
+
+	    const_src_iterator src_begin() const noexcept;
+	    const_src_iterator src_end() const noexcept;
 
 	    class output
 	    {

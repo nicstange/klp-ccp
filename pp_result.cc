@@ -773,6 +773,129 @@ rescan_output_segment(const _rescan_macro_invocation_ref &emitting_node,
 {}
 
 
+expansion_forest::rescan_macro_invocation::const_src_iterator::
+const_src_iterator() noexcept
+  : _forest(nullptr), _node(_forest_nodes::size_type::invalid()),
+    _remaining_src_length(0), _src_begin(0)
+{}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator::
+const_src_iterator(const _rescan_macro_invocation_ref &node,
+		   const _begin_tag&) noexcept
+  : _forest{&node.get_forest()},
+    _node{!node.deref().is_arg_tree_root() ?
+	  node.deref().get_rescan_parent() :
+	  node.get_node()},
+    _remaining_src_length{node.deref().src_length()},
+    _src_begin{!node.deref().is_arg_tree_root() ? node.deref().src_begin() : 0}
+{
+  _advance_node_to_emitting();
+}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator::
+const_src_iterator(const _rescan_macro_invocation_ref &node,
+		   const _end_tag&) noexcept
+  : _forest{&node.get_forest()}, _node{_forest_nodes::size_type::invalid()},
+    _remaining_src_length{0}, _src_begin{0}
+{}
+
+bool expansion_forest::rescan_macro_invocation::const_src_iterator::
+operator==(const const_src_iterator &rhs) const noexcept
+{
+  assert(this->_forest == rhs._forest);
+
+  const bool equal = (this->_remaining_src_length == rhs._remaining_src_length);
+  assert(!equal || (this->_node == rhs._node));
+  // When reading into the raw invocation source, _node will be
+  // invalid(), yet there might be some remaining src length to
+  // process.
+  assert(equal || this->_node != rhs._node ||
+	 this->_node == _forest_nodes::size_type::invalid());
+  assert(!equal || (this->_src_begin == rhs._src_begin));
+
+  return equal;
+}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator::reference
+expansion_forest::rescan_macro_invocation::const_src_iterator::
+operator*() const noexcept
+{
+  return rescan_output_segment{
+	  _rescan_macro_invocation_ref{*_forest, _node},
+	  _src_begin, _cur_src_segment_length()
+  };
+}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator&
+expansion_forest::rescan_macro_invocation::const_src_iterator::operator++()
+  noexcept
+{
+  if (_node == _forest_nodes::size_type::invalid()) {
+    // Reading from the raw invocation source, which is the last
+    // segment. Make the result compare equal to the end iterator.
+    _remaining_src_length = 0;
+    _src_begin = 0;
+    return *this;
+  }
+
+  const auto cur_src_segment_length = _cur_src_segment_length();
+  _src_begin += cur_src_segment_length;
+  _remaining_src_length -= cur_src_segment_length;
+  if (!_remaining_src_length) {
+    _node = _forest_nodes::size_type::invalid();
+    _src_begin = 0;
+    return *this;
+  }
+
+  _advance_node_to_emitting();
+
+  return *this;
+}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator
+expansion_forest::rescan_macro_invocation::const_src_iterator::
+operator++(int) noexcept
+{
+  const const_src_iterator i = *this;
+
+  ++*this;
+  return i;
+}
+
+void expansion_forest::rescan_macro_invocation::const_src_iterator::
+_advance_node_to_emitting() noexcept
+{
+  while (_node != _forest_nodes::size_type::invalid()) {
+    const _rescan_macro_invocation &node = (*_forest)[_node];
+    if (!node.is_arg_tree_root()) {
+      if (node.out_length() > _src_begin)
+	break;
+
+      _src_begin -= node.out_length();
+      _src_begin += node.src_begin() + node.src_length();
+      _node = node.get_rescan_parent();
+    } else {
+      // The offset of the (unexpanded) argument's beginning is relative
+      // to the owner's rescan parent's output.
+      _src_begin += node.src_begin();
+      _node = _forest->arg_owner(_node);
+      _node = (*_forest)[_node].get_rescan_parent();
+    }
+  }
+}
+
+std::size_t expansion_forest::rescan_macro_invocation::const_src_iterator::
+_cur_src_segment_length() const noexcept
+{
+  if (_node == _forest_nodes::size_type::invalid())
+    return _remaining_src_length;
+
+  assert(_src_begin < (*_forest)[_node].out_length());
+  return std::min((*_forest)[_node].out_length() - _src_begin,
+		  _remaining_src_length);
+}
+
+
 expansion_forest::rescan_macro_invocation::
 rescan_macro_invocation(const _rescan_macro_invocation_ref &ref) noexcept
   : _ref(ref)
@@ -784,27 +907,17 @@ operator==(const rescan_macro_invocation &rhs) const noexcept
   return _ref == rhs._ref;
 }
 
-expansion_forest::rescan_subtree::
-rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
-  : _subtree_root(subtree_root)
-{}
-
-
-pp_result::inclusion_node::inclusion_node()
-  : _parent(nullptr)
-{}
-
-pp_result::inclusion_node::inclusion_node(inclusion_node * const parent,
-					  const raw_pp_token_index range_begin)
-  : _parent(parent), _range(range_begin, range_begin)
-{}
-
-pp_result::inclusion_node::~inclusion_node() noexcept = default;
-
-pp_result::inclusion_node::recursive_header_inclusion_iterator
-pp_result::inclusion_node::header_inclusions_recursive_begin() const
+expansion_forest::rescan_macro_invocation::const_src_iterator
+expansion_forest::rescan_macro_invocation::src_begin() const noexcept
 {
-  return recursive_header_inclusion_iterator{_recursive_child_iterator{*this}};
+  return const_src_iterator{_ref, const_src_iterator::_begin_tag{}
+  };
+}
+
+expansion_forest::rescan_macro_invocation::const_src_iterator
+expansion_forest::rescan_macro_invocation::src_end() const noexcept
+{
+  return const_src_iterator{_ref, const_src_iterator::_end_tag{}};
 }
 
 
@@ -1173,6 +1286,30 @@ _add_fragment(const std::size_t out_length,
   _fragments.emplace_back(fragment{
       _next_fragment_out_begin(), out_length, fragment::builtin_special_tag{}
     });
+}
+
+
+expansion_forest::rescan_subtree::
+rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
+  : _subtree_root(subtree_root)
+{}
+
+
+pp_result::inclusion_node::inclusion_node()
+  : _parent(nullptr)
+{}
+
+pp_result::inclusion_node::inclusion_node(inclusion_node * const parent,
+					  const raw_pp_token_index range_begin)
+  : _parent(parent), _range(range_begin, range_begin)
+{}
+
+pp_result::inclusion_node::~inclusion_node() noexcept = default;
+
+pp_result::inclusion_node::recursive_header_inclusion_iterator
+pp_result::inclusion_node::header_inclusions_recursive_begin() const
+{
+  return recursive_header_inclusion_iterator{_recursive_child_iterator{*this}};
 }
 
 pp_result::inclusion_node::recursive_header_inclusion_iterator
