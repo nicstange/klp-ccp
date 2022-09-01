@@ -177,21 +177,31 @@ struct preprocessor::_scanned_macro_invocation
   raw_pp_token_index invocation_end;
 };
 
+
 struct preprocessor::_macro_expansion_stack_entry
 {
 private:
   typedef std::vector<_pp_token> _pp_tokens_type;
 
 public:
-  _macro_expansion_stack_entry(const pp_result::macro &_m,
-			       std::vector<_pp_tokens_type> &&args);
+  _macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const pp_result::macro &_m,
+		 std::vector<std::size_t> &&_args_offsets,
+		 std::vector<_pp_tokens_type> &&args);
 
-  _macro_expansion_stack_entry(const pp_result::macro &_m);
+  _macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const pp_result::macro &_m);
 
-  _macro_expansion_stack_entry(const _pp_tokens_type &arg_tokens);
+  _macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const _pp_tokens_type &arg_tokens);
 
   const pp_result::macro *m;
+  _macro_expansion_forest::_forest_nodes::size_type node;
 
+  std::vector<std::size_t> args_offsets;
   std::vector<_pp_tokens> args;
   std::vector<_pp_tokens> exp_args;
   std::vector<_pp_tokens>::size_type next_arg;
@@ -1070,6 +1080,8 @@ preprocessor::_try_expand
     return std::make_pair(false, _pp_tokens_type{});
   }
 
+  using expansion_forest_nodes = _macro_expansion_forest::_forest_nodes;
+
   pp_result::macro_invocation *mi;
   std::vector<_macro_expansion_stack_entry> expansion_stack;
   if (m->is_func_like()) {
@@ -1090,7 +1102,9 @@ preprocessor::_try_expand
 					      id_tok_index, smi.invocation_end
 					    },
 					    smi.n_tokens);
-    expansion_stack.emplace_back(*m, std::move(smi.args));
+    expansion_stack.emplace_back(expansion_forest_nodes::size_type{0},
+				 *m, std::move(smi.args_offsets),
+				 std::move(smi.args));
 
   } else {
     mi = &_pp_result->_add_macro_invocation(*m,
@@ -1098,9 +1112,13 @@ preprocessor::_try_expand
 					      id_tok_index, id_tok_index + 1
 					    },
 					    1);
-    expansion_stack.emplace_back(*m);
+    expansion_stack.emplace_back(expansion_forest_nodes::size_type{0},
+				 *m);
 
   }
+
+  expansion_forest_nodes &forest_nodes = mi->_expansion_forest._forest;
+
   std::stack<_pp_tokens_type> result_stack;
   result_stack.emplace();
 
@@ -1121,7 +1139,12 @@ preprocessor::_try_expand
       if (t.next_arg != t.args.size()) {
 	// Add a dummy ID macro expansion spanning the argument's
 	// unexpanded tokens and expand it recursively.
-	expansion_stack.emplace_back(t.args[t.next_arg]);
+	const expansion_forest_nodes::size_type arg_root_node =
+	  forest_nodes.add_macro_arg_tree(t.node,
+					  (forest_nodes[t.node].src_begin() +
+					   t.args_offsets[t.next_arg]),
+					  t.args[t.next_arg].size());
+	expansion_stack.emplace_back(arg_root_node, t.args[t.next_arg]);
 	result_stack.emplace();
 	continue;
       }
@@ -1134,6 +1157,7 @@ preprocessor::_try_expand
 				    mi->get_source_range());
 	t.out_tokens = &t._out_tokens[0];
 	t.n_out_tokens = t._out_tokens.size();
+	forest_nodes[t.node]._out_length = t.n_out_tokens;
       }
 
     } else if (t.next_out_token == t.n_out_tokens) {
@@ -1293,14 +1317,21 @@ preprocessor::_try_expand
 
 	_scanned_macro_invocation smi =
 	  _read_func_macro_invocation(*m, id_tok_index, read_tok);
-	expansion_stack.emplace_back(*m, std::move(smi.args));
+	const expansion_forest_nodes::size_type node =
+	  forest_nodes.add_rescan_invocation(t.node, *m,
+					     cur_out_token_index, smi.n_tokens);
+	expansion_stack.emplace_back(node, *m, std::move(smi.args_offsets),
+				     std::move(smi.args));
 	if (mi->get_source_range().end < smi.invocation_end)
 	  _pp_result->_extend_macro_invocation_range(*mi, smi.invocation_end);
 	break;
 
       } else {
 	// Object-like macro invocation.
-	expansion_stack.emplace_back(*m);
+	const expansion_forest_nodes::size_type node =
+	  forest_nodes.add_rescan_invocation(t.node, *m,
+					     cur_out_token_index, 1);
+	expansion_stack.emplace_back(node, *m);
 	break;
 
       }
@@ -2788,23 +2819,29 @@ _check_macro_repl(const raw_pp_tokens::const_iterator begin,
 }
 
 
-preprocessor::_macro_expansion_stack_entry::
-_macro_expansion_stack_entry(const pp_result::macro &_m,
-			     std::vector<_pp_tokens> &&_args)
-  : m(&_m), args(std::move(_args)), next_arg(0),
+preprocessor::_macro_expansion_stack_entry::_macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const pp_result::macro &_m,
+		 std::vector<std::size_t> &&_args_offsets,
+		 std::vector<_pp_tokens> &&_args)
+  : m(&_m), node(_node),
+    args_offsets(std::move(_args_offsets)), args(std::move(_args)), next_arg(0),
     out_tokens(nullptr), n_out_tokens(0), next_out_token(0)
 {
   exp_args.resize(args.size());
 }
 
-preprocessor::_macro_expansion_stack_entry::
-_macro_expansion_stack_entry(const pp_result::macro &_m)
-  : m(&_m), next_arg(0), out_tokens(nullptr), n_out_tokens(0), next_out_token(0)
+preprocessor::_macro_expansion_stack_entry::_macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const pp_result::macro &_m)
+  : m(&_m), node(_node), next_arg(0),
+    out_tokens(nullptr), n_out_tokens(0), next_out_token(0)
 {}
 
-preprocessor::_macro_expansion_stack_entry::
-_macro_expansion_stack_entry(const _pp_tokens_type &arg_tokens)
-  : m(nullptr), next_arg(0),
+preprocessor::_macro_expansion_stack_entry::_macro_expansion_stack_entry
+		(const _macro_expansion_forest::_forest_nodes::size_type _node,
+		 const _pp_tokens_type &arg_tokens)
+  : m(nullptr), node(_node), next_arg(0),
     out_tokens(arg_tokens.data()), n_out_tokens(arg_tokens.size()),
     next_out_token(0)
 {}

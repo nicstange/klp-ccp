@@ -149,6 +149,10 @@ namespace klp
 		(const raw_pp_token_index invocation_begin,
 		 const std::function<_pp_token(const _read_ctl)> &token_reader);
 
+    private:
+      using _macro_expansion_forest =
+	pp_result::macro_invocation::expansion_forest;
+
       std::vector<_pp_token>
       _expand_one(const pp_result::macro &m,
 		  pp_result::macro_invocation &mi,

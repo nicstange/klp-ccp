@@ -643,6 +643,7 @@ namespace klp
 
 	    private:
 	      friend class _forest_nodes;
+	      friend class preprocessor;
 
 	      size_type() = delete;
 
@@ -700,6 +701,7 @@ namespace klp
 
 	  private:
 	    friend class _forest_nodes;
+	    friend class preprocessor;
 
 	    _rescan_macro_invocation
 			(const _forest_nodes::size_type rescan_parent,
@@ -753,6 +755,8 @@ namespace klp
 			   const std::size_t src_length);
 
 	private:
+	  friend class preprocessor;
+
 	  _forest_nodes _forest;
 	}; // class expansion_forest
 
