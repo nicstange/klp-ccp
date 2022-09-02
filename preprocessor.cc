@@ -1700,39 +1700,39 @@ _expand_one(const pp_result::macro &m,
   const auto &repl_toks = m.get_repl();
 
   auto &&is_stringification =
-    [&](const raw_pp_tokens::const_iterator &it_repl) {
-      return m.is_func_like() && it_repl->is_punctuator("#");
+    [&](const raw_pp_tokens::size_type repl_pos) {
+      return m.is_func_like() && repl_toks[repl_pos].is_punctuator("#");
     };
 
   auto &&skip_ws =
-    [&](const raw_pp_tokens::const_iterator &it_repl) {
-      if (it_repl != repl_toks.end() && it_repl->is_ws()) {
+    [&](const raw_pp_tokens::size_type repl_pos) {
+      if (repl_pos != repl_toks.size() && repl_toks[repl_pos].is_ws()) {
 	// No whitespace at beginning or end of replacement list.
-	assert(it_repl + 1 != repl_toks.end());
+	assert(repl_pos + 1 != repl_toks.size());
 	// No multiple consecutive whitespace tokens in replacement
 	// list.
-	assert(!(it_repl + 1)->is_ws());
-	return it_repl + 1;
+	assert(!repl_toks[repl_pos + 1].is_ws());
+	return repl_pos + 1;
       }
-      return it_repl;
+      return repl_pos;
     };
 
-  auto &&advance_it_repl =
-    [&](const raw_pp_tokens::const_iterator &it_repl) {
-      assert(it_repl != repl_toks.end());
-      if (is_stringification(it_repl)) {
-	assert(skip_ws(it_repl + 1) != repl_toks.end());
-	assert(skip_ws(it_repl + 1)->is_id());
-	return skip_ws(it_repl + 1) + 1;
+  auto &&advance_repl_pos =
+    [&](const raw_pp_tokens::size_type repl_pos) {
+      assert(repl_pos != repl_toks.size());
+      if (is_stringification(repl_pos)) {
+	assert(skip_ws(repl_pos + 1) != repl_toks.size());
+	assert(repl_toks[skip_ws(repl_pos + 1)].is_id());
+	return skip_ws(repl_pos + 1) + 1;
       }
 
-      return it_repl + 1;
+      return repl_pos + 1;
     };
 
   auto &&is_vaargs =
-    [&](const raw_pp_tokens::const_iterator &it_repl) {
-      return (m.is_variadic() && it_repl->is_id() &&
-	      it_repl->get_value() == m.get_arg_names().back());
+    [&](const raw_pp_tokens::size_type repl_pos) {
+      return (m.is_variadic() && repl_toks[repl_pos].is_id() &&
+	      repl_toks[repl_pos].get_value() == m.get_arg_names().back());
     };
 
   std::map<std::string, std::vector<_pp_tokens>::size_type> args_name_map;
@@ -1758,10 +1758,10 @@ _expand_one(const pp_result::macro &m,
     };
 
   auto &&stringify =
-    [&](const raw_pp_tokens::const_iterator it_arg_id_tok) {
-      assert(it_arg_id_tok != repl_toks.end());
-      assert(it_arg_id_tok->is_id());
-      auto arg = resolve_arg(it_arg_id_tok->get_value(), false);
+    [&](const raw_pp_tokens::size_type arg_id_tok_pos) {
+      assert(arg_id_tok_pos != repl_toks.size());
+      assert(repl_toks[arg_id_tok_pos].is_id());
+      auto arg = resolve_arg(repl_toks[arg_id_tok_pos].get_value(), false);
       assert(arg);
 
       // Mark macro argument tokens participating in stringifications
@@ -1781,33 +1781,35 @@ _expand_one(const pp_result::macro &m,
   // Start the macro expansion with an empty token.
   result.emplace_back(pp_token::type::empty, std::string{}, invocation_range);
   bool last_was_ws_or_empty = true;
-  for (raw_pp_tokens::const_iterator it_repl = repl_toks.cbegin(), it_repl_next;
-       it_repl != repl_toks.end(); it_repl = it_repl_next) {
-    it_repl_next = advance_it_repl(it_repl);
-    auto it_repl_next_no_ws = skip_ws(it_repl_next);
-    assert(it_repl_next == repl_toks.end() ||
-	   it_repl_next_no_ws != repl_toks.end());
+  for (raw_pp_tokens::size_type repl_pos = 0, next_repl_pos;
+       repl_pos != repl_toks.size(); repl_pos = next_repl_pos) {
+    next_repl_pos = advance_repl_pos(repl_pos);
+    auto next_no_ws_repl_pos = skip_ws(next_repl_pos);
+    assert(next_repl_pos == repl_toks.size() ||
+	   next_no_ws_repl_pos != repl_toks.size());
 
-    if (it_repl_next_no_ws != repl_toks.end() &&
-	it_repl_next_no_ws->is_punctuator("##")) {
-      auto it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
-      assert(it_repl_next_concat_tok != repl_toks.end());
+    if (next_no_ws_repl_pos != repl_toks.size() &&
+	repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
+      auto next_concat_tok_repl_pos = skip_ws(next_no_ws_repl_pos + 1);
+      assert(next_concat_tok_repl_pos != repl_toks.size());
 
       // Handle the GNU extension that in a sequence of
       //  , ## __VA_ARGS__
       // the comma gets removed if __VA_ARGS__ is empty.
-      if (it_repl->is_punctuator(",") && is_vaargs(it_repl_next_concat_tok)) {
-	const auto it_repl_lookahead = skip_ws(it_repl_next_concat_tok + 1);
+      if (repl_toks[repl_pos].is_punctuator(",") &&
+	  is_vaargs(next_concat_tok_repl_pos)) {
+	const auto lookahead_repl_pos = skip_ws(next_concat_tok_repl_pos + 1);
 
-	if (it_repl_lookahead == repl_toks.end() ||
-	    !it_repl_lookahead->is_punctuator("##")) {
+	if (lookahead_repl_pos == repl_toks.size() ||
+	    !repl_toks[lookahead_repl_pos].is_punctuator("##")) {
 	  if (!args.back().empty()) {
-	    result.emplace_back(it_repl->get_type(), it_repl->get_value(),
+	    result.emplace_back(repl_toks[repl_pos].get_type(),
+				repl_toks[repl_pos].get_value(),
 				invocation_range);
 	    last_was_ws_or_empty = false;
 	  }
 
-	  it_repl_next = it_repl_next_concat_tok; // Continue at __VA_ARGS__
+	  next_repl_pos = next_concat_tok_repl_pos; // Continue at __VA_ARGS__
 	  continue;
 	}
       }
@@ -1815,15 +1817,15 @@ _expand_one(const pp_result::macro &m,
       // Otherwise it's a concatenation.
       _pp_token concat_result{pp_token::type::empty, std::string{},
 			      invocation_range};
-      assert(!it_repl->is_ws());
-      if (is_stringification(it_repl)) {
+      assert(!repl_toks[repl_pos].is_ws());
+      if (is_stringification(repl_pos)) {
 	concat_result.set_type_and_value(pp_token::type::str,
-					 stringify(skip_ws(it_repl + 1)));
+					 stringify(skip_ws(repl_pos + 1)));
 
       } else {
 	const std::vector<_pp_token> * arg = nullptr;
-	if (it_repl->is_id())
-	  arg = resolve_arg(it_repl->get_value(), false);
+	if (repl_toks[repl_pos].is_id())
+	  arg = resolve_arg(repl_toks[repl_pos].get_value(), false);
 
 	if (arg) {
 	  // Emit an empty token, if needed.
@@ -1864,70 +1866,72 @@ _expand_one(const pp_result::macro &m,
 
 	  }
 	} else {
-	  concat_result.set_type_and_value(it_repl->get_type(),
-					   it_repl->get_value());
+	  concat_result.set_type_and_value(repl_toks[repl_pos].get_type(),
+					   repl_toks[repl_pos].get_value());
 	}
       }
 
-      while (it_repl_next_no_ws != repl_toks.end() &&
-	     it_repl_next_no_ws->is_punctuator("##")) {
-	it_repl = it_repl_next_concat_tok;
-	assert(it_repl != repl_toks.end());
-	assert(!it_repl->is_ws());
+      while (next_no_ws_repl_pos != repl_toks.size() &&
+	     repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
+	repl_pos = next_concat_tok_repl_pos;
+	assert(repl_pos != repl_toks.size());
+	assert(!repl_toks[repl_pos].is_ws());
 
-	if (it_repl->is_punctuator("##")) {
+	if (repl_toks[repl_pos].is_punctuator("##")) {
 	  // Multile consecutive ## operators, collate.
-	  it_repl_next = it_repl_next_no_ws = it_repl;
-	  it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
+	  next_repl_pos = next_no_ws_repl_pos = repl_pos;
+	  next_concat_tok_repl_pos = skip_ws(next_no_ws_repl_pos + 1);
 	  continue;
 	}
 
-	it_repl_next = advance_it_repl(it_repl);
-	it_repl_next_no_ws = skip_ws(it_repl_next);
-	it_repl_next_concat_tok = skip_ws(it_repl_next_no_ws + 1);
-	assert(it_repl_next_no_ws == repl_toks.end() ||
-	       !it_repl_next_no_ws->is_punctuator("##") ||
-	       it_repl_next_concat_tok != repl_toks.end());
+	next_repl_pos = advance_repl_pos(repl_pos);
+	next_no_ws_repl_pos = skip_ws(next_repl_pos);
+	next_concat_tok_repl_pos = (next_no_ws_repl_pos != repl_toks.size() ?
+				    skip_ws(next_no_ws_repl_pos + 1) :
+				    next_no_ws_repl_pos);
+	assert(next_no_ws_repl_pos == repl_toks.size() ||
+	       !repl_toks[next_no_ws_repl_pos].is_punctuator("##") ||
+	       next_concat_tok_repl_pos != repl_toks.size());
 
 	// Handle the GNU extension that in a sequence of
 	//  ... ## , ## __VA_ARGS__,
 	// the comma gets removed if __VA_ARGS__ is empty.
-	if (it_repl->is_punctuator(",") &&
-	    it_repl_next_no_ws != repl_toks.end() &&
-	    it_repl_next_no_ws->is_punctuator("##") &&
-	    is_vaargs(it_repl_next_concat_tok)) {
-	  const auto it_repl_lookahead = skip_ws(it_repl_next_concat_tok + 1);
+	if (repl_toks[repl_pos].is_punctuator(",") &&
+	    next_no_ws_repl_pos != repl_toks.size() &&
+	    repl_toks[next_no_ws_repl_pos].is_punctuator("##") &&
+	    is_vaargs(next_concat_tok_repl_pos)) {
+	  const auto lookahead_repl_pos = skip_ws(next_concat_tok_repl_pos + 1);
 
-	  if (it_repl_lookahead == repl_toks.end() ||
-	      !it_repl_lookahead->is_punctuator("##")) {
+	  if (lookahead_repl_pos == repl_toks.size() ||
+	      !repl_toks[lookahead_repl_pos].is_punctuator("##")) {
 	    if (!args.back().empty()) {
 	      concat_result = _concat(std::move(concat_result),
 				      _pp_token{
-					it_repl->get_type(),
-					it_repl->get_value(),
+					repl_toks[repl_pos].get_type(),
+					repl_toks[repl_pos].get_value(),
 					invocation_range
 				      },
 				      invocation_range);
 	    }
 
-	    it_repl_next = it_repl_next_concat_tok; // Continue at __VA_ARGS__
+	    next_repl_pos = next_concat_tok_repl_pos; // Continue at __VA_ARGS__
 	    break;
 	  }
 	}
 
-	if (is_stringification(it_repl)) {
+	if (is_stringification(repl_pos)) {
 	  concat_result = _concat(std::move(concat_result),
 				  _pp_token{
 					pp_token::type::str,
-					stringify(skip_ws(it_repl + 1)),
+					stringify(skip_ws(repl_pos + 1)),
 					invocation_range
 				  },
 				  invocation_range);
 
 	} else {
 	  const std::vector<_pp_token> * arg = nullptr;
-	  if (it_repl->is_id())
-	    arg = resolve_arg(it_repl->get_value(), false);
+	  if (repl_toks[repl_pos].is_id())
+	    arg = resolve_arg(repl_toks[repl_pos].get_value(), false);
 	  if (arg) {
 	    if (arg->empty())
 	      continue;
@@ -1976,8 +1980,8 @@ _expand_one(const pp_result::macro &m,
 	    concat_result.expansion_history() +=
 	      arg->back().expansion_history();
 
-	    if (it_repl_next_no_ws != repl_toks.end() &&
-		it_repl_next_no_ws->is_punctuator("##")) {
+	    if (next_no_ws_repl_pos != repl_toks.size() &&
+		repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
 	      // Mark macro argument tokens participating in
 	      // concatenations as non-passthrough.
 	      if (arg->front().get_passed_through_raw_token() !=
@@ -1990,8 +1994,8 @@ _expand_one(const pp_result::macro &m,
 	  } else {
 	    concat_result = _concat(std::move(concat_result),
 				    _pp_token{
-					it_repl->get_type(),
-					it_repl->get_value(),
+					repl_toks[repl_pos].get_type(),
+					repl_toks[repl_pos].get_value(),
 					invocation_range
 				    },
 				    invocation_range);
@@ -2005,17 +2009,17 @@ _expand_one(const pp_result::macro &m,
 			  invocation_range);
       last_was_ws_or_empty = true;
 
-    } else if (is_stringification(it_repl)) {
+    } else if (is_stringification(repl_pos)) {
       result.emplace_back(pp_token::type::str,
-			  stringify(skip_ws(it_repl + 1)),
+			  stringify(skip_ws(repl_pos + 1)),
 			  invocation_range);
       last_was_ws_or_empty = false;
 
     } else {
       const std::vector<_pp_token> * arg = nullptr;
 
-      if (it_repl->is_id())
-	arg = resolve_arg(it_repl->get_value(), true);
+      if (repl_toks[repl_pos].is_id())
+	arg = resolve_arg(repl_toks[repl_pos].get_value(), true);
 
       if (arg) {
 	if (!last_was_ws_or_empty) {
@@ -2037,9 +2041,10 @@ _expand_one(const pp_result::macro &m,
 	last_was_ws_or_empty = true;
 
       } else {
-	result.emplace_back(it_repl->get_type(), it_repl->get_value(),
+	result.emplace_back(repl_toks[repl_pos].get_type(),
+			    repl_toks[repl_pos].get_value(),
 			    invocation_range);
-	last_was_ws_or_empty = it_repl->is_ws();
+	last_was_ws_or_empty = repl_toks[repl_pos].is_ws();
 
       }
     }
