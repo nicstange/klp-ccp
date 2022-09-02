@@ -679,6 +679,265 @@ namespace klp
 	  class _rescan_macro_invocation
 	  {
 	  public:
+	    class output
+	    {
+	    public:
+	      class fragment
+	      {
+	      private:
+		class _concat_builder;
+		friend class _concat_builder;
+
+		friend class output;
+		friend class preprocessor;
+
+		struct repl_tag{};
+		struct arg_tag{};
+		struct stringification_tag{};
+		struct concat_tag{};
+		struct conditional_comma_tag{};
+		struct builtin_special_tag{};
+		struct empty_tag{};
+
+	      public:
+		enum class op
+		{
+		  repl,
+		  arg,
+		  stringification,
+		  concat,
+		  conditional_comma,
+		  empty,
+		  builtin_special,
+		};
+
+		class repl_ref
+		{
+		public:
+		  std::size_t begin() const noexcept
+		  { return _begin; }
+
+		  std::size_t length() const noexcept
+		  { return _length; }
+
+		private:
+		  friend class expansion_forest;
+
+		  repl_ref() noexcept;
+
+		  repl_ref(const std::size_t begin) noexcept;
+
+		  repl_ref(const std::size_t begin,
+			   const std::size_t length) noexcept;
+
+		  void _extend(const std::size_t tail_begin) noexcept;
+
+		  std::size_t _begin;
+		  std::size_t _length;
+		};
+
+		class arg_ref
+		{
+		private:
+		  friend class fragment;
+		  friend class _concat_builder;
+
+		  arg_ref(const std::size_t arg_index) noexcept;
+
+
+		  std::size_t _arg_index;
+		};
+
+		class stringification
+		{
+		private:
+		  friend class fragment;
+		  friend class _concat_builder;
+
+		  stringification(const arg_ref &arg) noexcept;
+
+		  arg_ref _arg;
+		};
+
+		class concat_sequence
+		{
+		public:
+		  class component
+		  {
+		  public:
+		    enum class op
+		    {
+		      repl,
+		      arg,
+		      stringification,
+		      conditional_comma,
+		    };
+
+		  private:
+		    friend class _concat_builder;
+
+		    component(repl_ref &&repl, const repl_tag&) noexcept;
+
+		    component(repl_ref &&repl, arg_ref &&arg,
+			      const arg_tag&) noexcept;
+
+		    component(repl_ref &&repl, stringification &&s,
+			      const stringification_tag&) noexcept;
+
+		    component(repl_ref &&repl, const bool skipped,
+			      const conditional_comma_tag&)
+		      noexcept;
+
+		    op _op;
+		    repl_ref _repl;
+
+		    union {
+		      arg_ref _arg;
+		      stringification _stringification;
+		      bool _conditional_comma_skipped;
+		    };
+		  }; // class component
+
+		  concat_sequence(const concat_sequence&) = delete;
+
+		  concat_sequence(concat_sequence&&) = default;
+
+		private:
+		  friend class fragment;
+		  friend class _concat_builder;
+
+		  concat_sequence() = default;
+
+		  void _extend(component &&c);
+
+		  std::vector<component> _components;
+		}; // class concat_sequence
+
+		fragment(fragment &&seg);
+
+		~fragment() noexcept;
+
+	      private:
+		friend class output;
+
+		class _concat_builder
+		{
+		public:
+		  void add_component(const std::size_t repl_begin,
+				     const repl_tag&);
+
+		  void add_component(const std::size_t repl_begin,
+				     const std::size_t arg_index,
+				     const std::size_t arg_length,
+				     const arg_tag&);
+
+		  void add_component(const std::size_t repl_begin,
+				     const std::size_t repl_end,
+				     const std::size_t arg_index,
+				     const stringification_tag&) noexcept;
+
+		  void add_component(const std::size_t repl_begin,
+				     const std::size_t repl_end,
+				     const bool skipped,
+				     const conditional_comma_tag&) noexcept;
+
+		private:
+		  friend class output;
+
+		  _concat_builder(fragment &frag) noexcept;
+
+		  std::reference_wrapper<fragment> _frag;
+		};
+
+		fragment(const std::size_t repl_begin,
+			 const std::size_t out_begin,
+			 const repl_tag&);
+
+		fragment(const std::size_t arg_ref_repl_pos,
+			 const std::size_t out_begin,
+			 const std::size_t out_length,
+			 const std::size_t arg_index,
+			 const arg_tag&);
+
+		fragment(const std::size_t repl_begin,
+			 const std::size_t repl_length,
+			 const std::size_t out_begin,
+			 const std::size_t arg_index,
+			 const stringification_tag&);
+
+		fragment(const std::size_t repl_begin,
+			 const std::size_t out_begin,
+			 const concat_tag&);
+
+		fragment(const std::size_t repl_begin,
+			 const std::size_t repl_length,
+			 const std::size_t out_begin,
+			 const bool skipped,
+			 const conditional_comma_tag&);
+
+		fragment(const std::size_t out_begin,
+			 const empty_tag&);
+
+		fragment(const std::size_t out_begin,
+			 const std::size_t out_length,
+			 const builtin_special_tag&);
+
+		op _op;
+
+		std::size_t _out_begin;
+		std::size_t _out_length;
+
+		repl_ref _repl;
+
+		union {
+		  arg_ref _arg;
+		  stringification _stringification;
+		  concat_sequence _concat_sequence;
+		};
+	      }; // class fragment
+
+	      output() noexcept;
+
+	      output(output &&) noexcept;
+
+	      ~output() noexcept;
+
+	    private:
+	      friend class preprocessor;
+
+	      std::size_t _next_fragment_out_begin() const noexcept;
+
+	      void _add_fragment(const std::size_t repl_begin,
+				 const fragment::repl_tag&);
+
+	      void _add_fragment(const std::size_t arg_ref_repl_pos,
+				 const std::size_t arg_index,
+				 const std::size_t out_length,
+				 const fragment::arg_tag&);
+
+	      void _add_fragment(const std::size_t repl_begin,
+				 const std::size_t repl_end,
+				 const std::size_t arg_index,
+				 const fragment::stringification_tag&);
+
+	      fragment::_concat_builder
+	      _add_fragment(const std::size_t repl_begin,
+			    const fragment::concat_tag&);
+
+	      void _add_fragment(const std::size_t repl_begin,
+				 const std::size_t repl_end,
+				 const bool skipped,
+				 const fragment::conditional_comma_tag&);
+
+	      void _add_fragment(const fragment::empty_tag&);
+
+	      void _add_fragment(const std::size_t out_length,
+				 const fragment::builtin_special_tag&);
+
+	      std::vector<fragment> _fragments;
+	    }; // class output
+
+
 	    std::size_t src_begin() const noexcept
 	    { return _src_begin; }
 
@@ -724,6 +983,8 @@ namespace klp
 	    std::size_t _out_length;
 
 	    const macro *_m;
+
+	    output _output;
 	  }; // class _rescan_macro_invocation
 
 	  class _rescan_macro_invocation_ref
