@@ -1742,31 +1742,30 @@ _expand_one(const pp_result::macro &m,
     args_name_map.insert(std::make_pair(m.get_arg_names()[i_arg], i_arg));
   }
 
+  const std::size_t no_arg_index = std::numeric_limits<std::size_t>::max();
   auto &&resolve_arg =
-    [&](const std::string &name, const bool expanded) -> const _pp_tokens * {
-      if (!m.is_func_like())
-	return nullptr;
-
-      auto it_arg_mapping = args_name_map.find(name);
-      if (it_arg_mapping == args_name_map.end())
-	return nullptr;
-
-      const auto i_arg = it_arg_mapping->second;
-      const _pp_tokens *resolved
-	= expanded ? &exp_args[i_arg] : &args[i_arg];
-      return resolved;
-    };
-
-  auto &&stringify =
     [&](const raw_pp_tokens::size_type arg_id_tok_pos) {
       assert(arg_id_tok_pos != repl_toks.size());
       assert(repl_toks[arg_id_tok_pos].is_id());
-      auto arg = resolve_arg(repl_toks[arg_id_tok_pos].get_value(), false);
-      assert(arg);
 
+      if (!m.is_func_like())
+	return no_arg_index;
+
+      const auto &name = repl_toks[arg_id_tok_pos].get_value();
+      auto it_arg_mapping = args_name_map.find(name);
+      if (it_arg_mapping == args_name_map.end())
+	return no_arg_index;
+
+      return it_arg_mapping->second;
+    };
+
+  auto &&stringify =
+    [&](const raw_pp_tokens::size_type arg_index) {
+      assert(arg_index != no_arg_index);
       // Mark macro argument tokens participating in stringifications
       // as non-passthrough.
-      for (auto &&it_tok = (*arg).begin(); it_tok != (*arg).end(); ++it_tok) {
+      const _pp_tokens &arg = args[arg_index];
+      for (auto &&it_tok = arg.begin(); it_tok != arg.end(); ++it_tok) {
 	if (it_tok->get_passed_through_raw_token() !=
 	    _pp_token::not_passed_through) {
 	  mi._add_non_passthrough_macro_arg_token
@@ -1774,7 +1773,7 @@ _expand_one(const pp_result::macro &m,
 	}
       }
 
-      return _stringify(*arg);
+      return _stringify(arg);
     };
 
   std::vector<_pp_token> result;
@@ -1819,27 +1818,31 @@ _expand_one(const pp_result::macro &m,
 			      invocation_range};
       assert(!repl_toks[repl_pos].is_ws());
       if (is_stringification(repl_pos)) {
+	const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
+	const auto arg_index = resolve_arg(arg_id_tok_pos);
 	concat_result.set_type_and_value(pp_token::type::str,
-					 stringify(skip_ws(repl_pos + 1)));
+					 stringify(arg_index));
 
       } else {
-	const std::vector<_pp_token> * arg = nullptr;
+	auto arg_index = no_arg_index;
 	if (repl_toks[repl_pos].is_id())
-	  arg = resolve_arg(repl_toks[repl_pos].get_value(), false);
+	  arg_index = resolve_arg(repl_pos);
 
-	if (arg) {
+	if (arg_index != no_arg_index) {
 	  // Emit an empty token, if needed.
 	  if (!last_was_ws_or_empty) {
 	    result.emplace_back(pp_token::type::empty, std::string{},
 				invocation_range);
 	    last_was_ws_or_empty = true;
 	  }
-	  if (!arg->empty()) {
-	    if (arg->size() > 1) {
+
+	  const _pp_tokens &arg = args[arg_index];
+	  if (!arg.empty()) {
+	    if (arg.size() > 1) {
 	      // Only the argument's last token participates in
 	      // concatenation, the rest gets emitted verbatim.
-	      for (auto it_arg_tok = arg->begin();
-		   it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
+	      for (auto it_arg_tok = arg.begin();
+		   it_arg_tok + 1 != arg.end(); ++it_arg_tok) {
 		assert(!it_arg_tok->is_newline());
 		result.emplace_back(it_arg_tok->get_type(),
 				    it_arg_tok->get_value(),
@@ -1849,19 +1852,19 @@ _expand_one(const pp_result::macro &m,
 	      }
 	    }
 
-	    assert(!arg->back().is_empty() && !arg->back().is_ws() &&
-		   !arg->back().is_newline());
-	    concat_result.set_type_and_value(arg->back().get_type(),
-					     arg->back().get_value());
+	    assert(!arg.back().is_empty() && !arg.back().is_ws() &&
+		   !arg.back().is_newline());
+	    concat_result.set_type_and_value(arg.back().get_type(),
+					     arg.back().get_value());
 	    concat_result.expansion_history() +=
-	      arg->back().expansion_history();
+	      arg.back().expansion_history();
 
 	    // Mark macro argument tokens participating in
 	    // concatenations as non-passthrough.
-	    if (arg->back().get_passed_through_raw_token() !=
+	    if (arg.back().get_passed_through_raw_token() !=
 		_pp_token::not_passed_through) {
 		mi._add_non_passthrough_macro_arg_token
-			(arg->back().get_passed_through_raw_token());
+			(arg.back().get_passed_through_raw_token());
 	    }
 
 	  }
@@ -1920,42 +1923,45 @@ _expand_one(const pp_result::macro &m,
 	}
 
 	if (is_stringification(repl_pos)) {
+	  const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
+	  const auto arg_index = resolve_arg(arg_id_tok_pos);
 	  concat_result = _concat(std::move(concat_result),
 				  _pp_token{
 					pp_token::type::str,
-					stringify(skip_ws(repl_pos + 1)),
+					stringify(arg_index),
 					invocation_range
 				  },
 				  invocation_range);
 
 	} else {
-	  const std::vector<_pp_token> * arg = nullptr;
+	  auto arg_index = no_arg_index;
 	  if (repl_toks[repl_pos].is_id())
-	    arg = resolve_arg(repl_toks[repl_pos].get_value(), false);
-	  if (arg) {
-	    if (arg->empty())
-	      continue;
+	    arg_index = resolve_arg(repl_pos);
 
-	    assert(!arg->front().is_empty() && !arg->front().is_ws() &&
-		   !arg->front().is_newline());
+	  if (arg_index != no_arg_index) {
+	    const _pp_tokens &arg = args[arg_index];
+	    if (arg.empty())
+	      continue;
+	    assert(!arg.front().is_empty() && !arg.front().is_ws() &&
+		   !arg.front().is_newline());
 	    concat_result = _concat(std::move(concat_result),
 				    _pp_token{
-					arg->front().get_type(),
-					arg->front().get_value(),
+					arg.front().get_type(),
+					arg.front().get_value(),
 					invocation_range,
-					arg->front().expansion_history()
+					arg.front().expansion_history()
 				    },
 				    invocation_range);
 
 	    // Mark macro argument tokens participating in
 	    // concatenations as non-passthrough.
-	    if (arg->front().get_passed_through_raw_token() !=
+	    if (arg.front().get_passed_through_raw_token() !=
 		_pp_token::not_passed_through) {
 		mi._add_non_passthrough_macro_arg_token
-			(arg->front().get_passed_through_raw_token());
+			(arg.front().get_passed_through_raw_token());
 	    }
 
-	    if (arg->size() == 1)
+	    if (arg.size() == 1)
 	      continue;
 
 	    // Only the argument's first token participates in the
@@ -1963,8 +1969,8 @@ _expand_one(const pp_result::macro &m,
 	    // are emitted verbatim, the last one might start a
 	    // subsequent concatenation operation, if any.
 	    result.emplace_back(std::move(concat_result));
-	    for (auto it_arg_tok = arg->begin() + 1;
-		 it_arg_tok + 1 != arg->end(); ++it_arg_tok) {
+	    for (auto it_arg_tok = arg.begin() + 1;
+		 it_arg_tok + 1 != arg.end(); ++it_arg_tok) {
 	      assert(!it_arg_tok->is_newline());
 	      result.emplace_back(it_arg_tok->get_type(),
 				  it_arg_tok->get_value(),
@@ -1973,21 +1979,21 @@ _expand_one(const pp_result::macro &m,
 				  it_arg_tok->get_passed_through_raw_token());
 	    }
 
-	    assert(!arg->back().is_empty() && !arg->back().is_ws() &&
-		   !arg->back().is_newline());
-	    concat_result.set_type_and_value(arg->back().get_type(),
-					     arg->back().get_value());
+	    assert(!arg.back().is_empty() && !arg.back().is_ws() &&
+		   !arg.back().is_newline());
+	    concat_result.set_type_and_value(arg.back().get_type(),
+					     arg.back().get_value());
 	    concat_result.expansion_history() +=
-	      arg->back().expansion_history();
+	      arg.back().expansion_history();
 
 	    if (next_no_ws_repl_pos != repl_toks.size() &&
 		repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
 	      // Mark macro argument tokens participating in
 	      // concatenations as non-passthrough.
-	      if (arg->front().get_passed_through_raw_token() !=
+	      if (arg.front().get_passed_through_raw_token() !=
 		  _pp_token::not_passed_through) {
 		  mi._add_non_passthrough_macro_arg_token
-			(arg->front().get_passed_through_raw_token());
+			(arg.front().get_passed_through_raw_token());
 	      }
 	    }
 
@@ -2010,31 +2016,33 @@ _expand_one(const pp_result::macro &m,
       last_was_ws_or_empty = true;
 
     } else if (is_stringification(repl_pos)) {
+      const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
+      const auto arg_index = resolve_arg(arg_id_tok_pos);
       result.emplace_back(pp_token::type::str,
-			  stringify(skip_ws(repl_pos + 1)),
+			  stringify(arg_index),
 			  invocation_range);
       last_was_ws_or_empty = false;
 
     } else {
-      const std::vector<_pp_token> * arg = nullptr;
-
+      auto arg_index = no_arg_index;
       if (repl_toks[repl_pos].is_id())
-	arg = resolve_arg(repl_toks[repl_pos].get_value(), true);
+	arg_index = resolve_arg(repl_pos);
 
-      if (arg) {
+      if (arg_index != no_arg_index) {
 	if (!last_was_ws_or_empty) {
 	  result.emplace_back(pp_token::type::empty, std::string{},
 			      invocation_range);
 	}
 
-	for (const auto &arg_tok : *arg) {
+	const _pp_tokens &arg = exp_args[arg_index];
+	for (const auto &arg_tok : arg) {
 	  assert(!arg_tok.is_newline());
 	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value(),
 			      invocation_range, arg_tok.expansion_history(),
 			      arg_tok.get_passed_through_raw_token());
 	}
 
-	if (!arg->empty() && !arg->back().is_empty()) {
+	if (!arg.empty() && !arg.back().is_empty()) {
 	  result.emplace_back(pp_token::type::empty, std::string{},
 			      invocation_range);
 	}
