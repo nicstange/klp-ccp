@@ -1779,8 +1779,12 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
     };
 
   std::vector<_pp_token> result;
+  using out_fragment =
+    _macro_expansion_forest::_rescan_macro_invocation::output::fragment;
+  auto &out_fragments = rmi._output;
   // Start the macro expansion with an empty token.
   result.emplace_back(pp_token::type::empty, std::string{}, invocation_range);
+  out_fragments._add_fragment(out_fragment::empty_tag{});
   bool last_was_ws_or_empty = true;
   for (raw_pp_tokens::size_type repl_pos = 0, next_repl_pos;
        repl_pos != repl_toks.size(); repl_pos = next_repl_pos) {
@@ -1807,7 +1811,13 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    result.emplace_back(repl_toks[repl_pos].get_type(),
 				repl_toks[repl_pos].get_value(),
 				invocation_range);
+	    out_fragments._add_fragment
+	      (repl_pos, next_no_ws_repl_pos + 1, false,
+	       out_fragment::conditional_comma_tag{});
 	    last_was_ws_or_empty = false;
+	  } else {
+	    out_fragments._add_fragment(repl_pos, next_no_ws_repl_pos + 1, true,
+					out_fragment::conditional_comma_tag{});
 	  }
 
 	  next_repl_pos = next_concat_tok_repl_pos; // Continue at __VA_ARGS__
@@ -1820,17 +1830,23 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       if (!last_was_ws_or_empty) {
 	result.emplace_back(pp_token::type::empty, std::string{},
 			    invocation_range);
+	out_fragments._add_fragment(out_fragment::empty_tag{});
 	last_was_ws_or_empty = true;
       }
 
       _pp_token concat_result{pp_token::type::empty, std::string{},
 			      invocation_range};
+      auto concat_frag = out_fragments._add_fragment
+	(repl_pos, out_fragment::concat_tag{});
       assert(!repl_toks[repl_pos].is_ws());
       if (is_stringification(repl_pos)) {
 	const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
 	const auto arg_index = resolve_arg(arg_id_tok_pos);
 	concat_result.set_type_and_value(pp_token::type::str,
 					 stringify(arg_index));
+	concat_frag.add_component(repl_pos, arg_id_tok_pos + 1,
+				  arg_index,
+				  out_fragment::stringification_tag{});
 
       } else {
 	auto arg_index = no_arg_index;
@@ -1858,6 +1874,8 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		   !arg.back().is_newline());
 	    concat_result.set_type_and_value(arg.back().get_type(),
 					     arg.back().get_value());
+	    concat_frag.add_component(repl_pos, arg_index, arg.size(),
+				      out_fragment::arg_tag{});
 	    concat_result.expansion_history() +=
 	      arg.back().expansion_history();
 
@@ -1873,6 +1891,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	} else {
 	  concat_result.set_type_and_value(repl_toks[repl_pos].get_type(),
 					   repl_toks[repl_pos].get_value());
+	  concat_frag.add_component(repl_pos, out_fragment::repl_tag{});
 	}
       }
 
@@ -1917,6 +1936,12 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 					invocation_range
 				      },
 				      invocation_range);
+	      concat_frag.add_component
+		(repl_pos, next_no_ws_repl_pos + 1, false,
+		 out_fragment::conditional_comma_tag{});
+	    } else {
+	      concat_frag.add_component(repl_pos, next_no_ws_repl_pos + 1, true,
+					out_fragment::conditional_comma_tag{});
 	    }
 
 	    next_repl_pos = next_concat_tok_repl_pos; // Continue at __VA_ARGS__
@@ -1934,6 +1959,9 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 					invocation_range
 				  },
 				  invocation_range);
+	  concat_frag.add_component(repl_pos, arg_id_tok_pos + 1,
+				    arg_index,
+				    out_fragment::stringification_tag{});
 
 	} else {
 	  auto arg_index = no_arg_index;
@@ -1954,6 +1982,8 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 					arg.front().expansion_history()
 				    },
 				    invocation_range);
+	    concat_frag.add_component(repl_pos, arg_index, arg.size(),
+				      out_fragment::arg_tag{});
 
 	    // Mark macro argument tokens participating in
 	    // concatenations as non-passthrough.
@@ -2007,6 +2037,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 					invocation_range
 				    },
 				    invocation_range);
+	    concat_frag.add_component(repl_pos, out_fragment::repl_tag{});
 
 	  }
 	}
@@ -2015,6 +2046,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       result.emplace_back(std::move(concat_result));
       result.emplace_back(pp_token::type::empty, std::string{},
 			  invocation_range);
+      out_fragments._add_fragment(out_fragment::empty_tag{});
       last_was_ws_or_empty = true;
 
     } else if (is_stringification(repl_pos)) {
@@ -2023,6 +2055,8 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       result.emplace_back(pp_token::type::str,
 			  stringify(arg_index),
 			  invocation_range);
+      out_fragments._add_fragment(repl_pos, arg_id_tok_pos + 1, arg_index,
+				  out_fragment::stringification_tag{});
       last_was_ws_or_empty = false;
 
     } else {
@@ -2034,6 +2068,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	if (!last_was_ws_or_empty) {
 	  result.emplace_back(pp_token::type::empty, std::string{},
 			      invocation_range);
+	  out_fragments._add_fragment(out_fragment::empty_tag{});
 	}
 
 	const _pp_tokens &arg = exp_args[arg_index];
@@ -2043,10 +2078,13 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 			      invocation_range, arg_tok.expansion_history(),
 			      arg_tok.get_passed_through_raw_token());
 	}
+	out_fragments._add_fragment(repl_pos, arg_index, arg.size(),
+				    out_fragment::arg_tag{});
 
 	if (!arg.empty() && !arg.back().is_empty()) {
 	  result.emplace_back(pp_token::type::empty, std::string{},
 			      invocation_range);
+	  out_fragments._add_fragment(out_fragment::empty_tag{});
 	}
 	last_was_ws_or_empty = true;
 
@@ -2054,6 +2092,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	result.emplace_back(repl_toks[repl_pos].get_type(),
 			    repl_toks[repl_pos].get_value(),
 			    invocation_range);
+	out_fragments._add_fragment(repl_pos, out_fragment::repl_tag{});
 	last_was_ws_or_empty = repl_toks[repl_pos].is_ws();
 
       }
@@ -2064,6 +2103,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
   if (!last_was_ws_or_empty) {
     result.emplace_back(pp_token::type::empty, std::string{},
 			invocation_range);
+    out_fragments._add_fragment(out_fragment::empty_tag{});
   }
 
   for (auto &tok : result) {
@@ -2084,6 +2124,9 @@ _expand_one_builtin_special
 {
   const pp_result::macro &m = rmi.get_macro();
   std::vector<preprocessor::_pp_token> result;
+  using out_fragment =
+    _macro_expansion_forest::_rescan_macro_invocation::output::fragment;
+  auto &out_fragments = rmi._output;
 
   if (&m == &_m_defined_op) {
     assert(args.size() == 1 && args[0].size() == 1 && args[0][0].is_id());
@@ -2102,6 +2145,7 @@ _expand_one_builtin_special
     result.emplace_back(pp_token::type::pp_number,
 			is_defined ? "1" : "0",
 			invocation_range, pp_result::used_macros{});
+    out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__FILE__") {
     const auto &source =
@@ -2109,10 +2153,12 @@ _expand_one_builtin_special
 
     result.emplace_back(pp_token::type::str, source.get_filename(),
 			invocation_range, pp_result::used_macros{});
+    out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__BASE_FILE__") {
     result.emplace_back(pp_token::type::str, _base_file,
 			invocation_range, pp_result::used_macros{});
+    out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__LINE__") {
       const auto &source =
@@ -2123,16 +2169,19 @@ _expand_one_builtin_special
 
       result.emplace_back(pp_token::type::pp_number, std::to_string(line),
 			  invocation_range, pp_result::used_macros{});
+      out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__INCLUDE_LEVEL__") {
     result.emplace_back(pp_token::type::pp_number,
 			std::to_string(_tokenizers.size() - 1),
 			invocation_range, pp_result::used_macros{});
+    out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__COUNTER__") {
     result.emplace_back(pp_token::type::pp_number,
 			std::to_string(__counter__++),
 			invocation_range, pp_result::used_macros{});
+    out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else {
       assert(0);
