@@ -1152,7 +1152,7 @@ preprocessor::_try_expand
       // All arguments have been expanded as needed, but not the macro
       // itself yet. Do it now.
       if (!t.out_tokens) {
-	t._out_tokens = _expand_one(*t.m, *mi,
+	t._out_tokens = _expand_one(forest_nodes[t.node], *mi,
 				    std::move(t.args), std::move(t.exp_args),
 				    mi->get_source_range());
 	t.out_tokens = &t._out_tokens[0];
@@ -1666,14 +1666,16 @@ preprocessor::_read_defined_operator_invocation
 }
 
 std::vector<preprocessor::_pp_token> preprocessor::
-_expand_one(const pp_result::macro &m,
+_expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    pp_result::macro_invocation &mi,
 	    std::vector<_pp_tokens> &&args,
 	    std::vector<_pp_tokens> &&exp_args,
 	    const raw_pp_tokens_range &invocation_range)
 {
+  const pp_result::macro &m = rmi.get_macro();
+
   if (m.is_builtin_special()) {
-    return _expand_one_builtin_special(m, std::move(args), invocation_range);
+    return _expand_one_builtin_special(rmi, std::move(args), invocation_range);
   }
 
   // This is the core of macro expansion.
@@ -2075,10 +2077,12 @@ _expand_one(const pp_result::macro &m,
 }
 
 std::vector<preprocessor::_pp_token> preprocessor::
-_expand_one_builtin_special(const pp_result::macro &m,
-			    std::vector<_pp_tokens> &&args,
-			    const raw_pp_tokens_range &invocation_range)
+_expand_one_builtin_special
+			(_macro_expansion_forest::_rescan_macro_invocation &rmi,
+			 std::vector<_pp_tokens> &&args,
+			 const raw_pp_tokens_range &invocation_range)
 {
+  const pp_result::macro &m = rmi.get_macro();
   std::vector<preprocessor::_pp_token> result;
 
   if (&m == &_m_defined_op) {

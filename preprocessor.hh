@@ -154,16 +154,17 @@ namespace klp
 	pp_result::macro_invocation::expansion_forest;
 
       std::vector<_pp_token>
-      _expand_one(const pp_result::macro &m,
+      _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		  pp_result::macro_invocation &mi,
 		  std::vector<_pp_tokens> &&args,
 		  std::vector<_pp_tokens> &&exp_args,
 		  const raw_pp_tokens_range &invocation_range);
 
       std::vector<_pp_token>
-      _expand_one_builtin_special(const pp_result::macro &m,
-				  std::vector<_pp_tokens> &&args,
-				  const raw_pp_tokens_range &invocation_range);
+      _expand_one_builtin_special
+			(_macro_expansion_forest::_rescan_macro_invocation &rmi,
+			 std::vector<_pp_tokens> &&args,
+			 const raw_pp_tokens_range &invocation_range);
 
       static std::string _stringify(const std::vector<_pp_token> &arg_toks);
 
