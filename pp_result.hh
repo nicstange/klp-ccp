@@ -902,6 +902,8 @@ namespace klp
 
 	      ~output() noexcept;
 
+	      std::size_t out_length() const noexcept;
+
 	    private:
 	      friend class preprocessor;
 
@@ -944,8 +946,7 @@ namespace klp
 	    std::size_t src_length() const noexcept
 	    { return _src_length; }
 
-	    std::size_t out_length() const noexcept
-	    { return _out_length; }
+	    std::size_t out_length() const noexcept;
 
 	    bool is_rescan_tree_root() const noexcept;
 
@@ -980,7 +981,6 @@ namespace klp
 	     */
 	    std::size_t _src_begin;
 	    std::size_t _src_length;
-	    std::size_t _out_length;
 
 	    const macro *_m;
 

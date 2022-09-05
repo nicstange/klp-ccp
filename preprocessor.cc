@@ -1157,7 +1157,7 @@ preprocessor::_try_expand
 				    mi->get_source_range());
 	t.out_tokens = &t._out_tokens[0];
 	t.n_out_tokens = t._out_tokens.size();
-	forest_nodes[t.node]._out_length = t.n_out_tokens;
+	assert(t.n_out_tokens == forest_nodes[t.node].out_length());
       }
 
     } else if (t.next_out_token == t.n_out_tokens) {

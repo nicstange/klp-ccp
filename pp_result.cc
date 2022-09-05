@@ -755,6 +755,12 @@ expansion_forest::_rescan_macro_invocation::output::output(output &&) noexcept
 expansion_forest::_rescan_macro_invocation::output::~output() noexcept
   = default;
 
+std::size_t expansion_forest::_rescan_macro_invocation::output::out_length()
+  const noexcept
+{
+  return _next_fragment_out_begin();
+}
+
 std::size_t
 expansion_forest::_rescan_macro_invocation::output::_next_fragment_out_begin()
   const noexcept
@@ -847,17 +853,25 @@ _rescan_macro_invocation
 (const _forest_nodes::size_type rescan_parent, const macro &m,
  const std::size_t src_begin, const std::size_t src_length)
   : _rescan_parent(rescan_parent), _nargs(0),
-    _src_begin(src_begin), _src_length(src_length),
-    _out_length(0), _m(&m)
+    _src_begin(src_begin), _src_length(src_length), _m(&m)
 {}
 
 expansion_forest::_rescan_macro_invocation::
 _rescan_macro_invocation(const std::size_t src_begin,
 			 const std::size_t src_length)
   : _rescan_parent(_forest_nodes::size_type::invalid()), _nargs(0),
-    _src_begin(src_begin), _src_length(src_length),
-    _out_length(src_length), _m(nullptr)
+    _src_begin(src_begin), _src_length(src_length), _m(nullptr)
 {}
+
+std::size_t expansion_forest::_rescan_macro_invocation::out_length()
+  const noexcept
+{
+  // The roots for argument expansions are dummy identity mappings.
+  if (is_arg_tree_root())
+    return _src_length;
+
+  return _output.out_length();
+}
 
 bool expansion_forest::_rescan_macro_invocation::
 is_rescan_tree_root() const noexcept
