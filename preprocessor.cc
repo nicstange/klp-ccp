@@ -1814,6 +1814,13 @@ _expand_one(const pp_result::macro &m,
       }
 
       // Otherwise it's a concatenation.
+      // Emit an empty token, if needed.
+      if (!last_was_ws_or_empty) {
+	result.emplace_back(pp_token::type::empty, std::string{},
+			    invocation_range);
+	last_was_ws_or_empty = true;
+      }
+
       _pp_token concat_result{pp_token::type::empty, std::string{},
 			      invocation_range};
       assert(!repl_toks[repl_pos].is_ws());
@@ -1829,13 +1836,6 @@ _expand_one(const pp_result::macro &m,
 	  arg_index = resolve_arg(repl_pos);
 
 	if (arg_index != no_arg_index) {
-	  // Emit an empty token, if needed.
-	  if (!last_was_ws_or_empty) {
-	    result.emplace_back(pp_token::type::empty, std::string{},
-				invocation_range);
-	    last_was_ws_or_empty = true;
-	  }
-
 	  const _pp_tokens &arg = args[arg_index];
 	  if (!arg.empty()) {
 	    if (arg.size() > 1) {
