@@ -95,23 +95,16 @@ static void show_opt_missing(const char * const prog,
   show_usage(prog);
 }
 
-static pp_token_index emit_tokens_until(const pp_tokens &tokens,
+static pp_token_index emit_tokens_until(const pp_result &ppr,
 					const pp_token_index pos,
 					const raw_pp_token_index raw_end)
 {
-  const auto it_end
-    = std::upper_bound(tokens.begin() + pos, tokens.end(),
-		       raw_end,
-		       [](const raw_pp_token_index raw_end,
-			  const pp_token &tok) {
-			 return raw_end <= tok.get_token_source().begin;
-		       });
-  assert(it_end != tokens.end());
-
-  const pp_token_index end = it_end - tokens.begin();
-  emit_normalized_tokens(tokens, pos, end,
+  const auto end_pos =
+    ppr.raw_pp_tokens_range_to_nonraw(raw_pp_tokens_range{raw_end, raw_end})
+    .begin;
+  emit_normalized_tokens(ppr.get_pp_tokens(), pos, end_pos,
 			 [](const std::string &s) { std::cout << s; });
-  return end;
+  return end_pos;
 }
 
 int main(int argc, char* argv[])
@@ -295,21 +288,20 @@ int main(int argc, char* argv[])
     const auto &cur_range = h.get_range();
     if (it_src == it_src_end) {
       emit_src_annotation(h, raw_tok_index);
-      tok_index = emit_tokens_until(tokens, tok_index, cur_range.end);
+      tok_index = emit_tokens_until(ppr, tok_index, cur_range.end);
       break;
-
     }
 
     const auto &next_range = it_src->get_range();
     if (next_range.is_contained_in(cur_range)) {
       emit_src_annotation(h, raw_tok_index);
-      tok_index = emit_tokens_until(tokens, tok_index, next_range.begin);
+      tok_index = emit_tokens_until(ppr, tok_index, next_range.begin);
       raw_tok_index = next_range.begin;
     } else {
       assert(cur_range.is_contained_in(next_range) ||
 	     cur_range.end == next_range.begin);
       emit_src_annotation(h, raw_tok_index);
-      tok_index = emit_tokens_until(tokens, tok_index, cur_range.end);
+      tok_index = emit_tokens_until(ppr, tok_index, cur_range.end);
       raw_tok_index = cur_range.end;
     }
   }
