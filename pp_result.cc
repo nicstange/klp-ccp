@@ -763,6 +763,14 @@ expansion_forest::expansion_forest(const macro &m,
   : _forest(m, src_begin, src_length)
 {}
 
+const expansion_forest::rescan_subtree expansion_forest::get_main_tree()
+  const noexcept
+{
+  return rescan_subtree{
+    _rescan_macro_invocation_ref{_forest, _forest_nodes::size_type{0}}
+  };
+}
+
 
 expansion_forest::rescan_output_segment::
 rescan_output_segment(const _rescan_macro_invocation_ref &emitting_node,
@@ -1607,6 +1615,385 @@ std::size_t expansion_forest::rescan_subtree::total_out_length() const
     total_out_length += forest[node].out_length();
   }
   return total_out_length;
+}
+
+
+pp_result::_pp_tokens_origins::_pp_tokens_origins() noexcept = default;
+
+pp_result::_pp_tokens_origins::_pp_tokens_origins(_pp_tokens_origins&&) noexcept
+  = default;
+
+pp_result::_pp_tokens_origins::~_pp_tokens_origins() noexcept = default;
+
+void pp_result::_pp_tokens_origins::
+append(raw_pp_token_index raw_index,
+       const _macro_invocations_container_type &macro_invocations,
+       const from_raw_tag)
+{
+  if (!_pp_tokens_seqs_origins.empty()) {
+    auto &back = _pp_tokens_seqs_origins.back();
+    switch (back._kind)
+    {
+    case _pp_tokens_seq_origin::_kind::from_raw:
+      if (back._source.raw_source.range.end == raw_index) {
+	++back._source.raw_source.range.end;
+	return;
+      }
+      break;
+    case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+      break;
+    }
+  }
+
+  const pp_token_index out_begin = _total_out_end(macro_invocations);
+  _pp_tokens_seqs_origins.emplace_back(out_begin, raw_index,
+				       from_raw_tag{});
+}
+
+void pp_result::_pp_tokens_origins::
+append(const _macro_invocations_index_type mi_index,
+       const _macro_invocations_container_type &macro_invocations,
+       const from_macro_expansion_tag)
+{
+  const pp_token_index out_begin = _total_out_end(macro_invocations);
+  _pp_tokens_seqs_origins.emplace_back(out_begin, mi_index,
+				       from_macro_expansion_tag{});
+}
+
+void pp_result::_pp_tokens_origins::
+drop_pp_tokens_tail(const pp_tokens::size_type new_end,
+		    const _macro_invocations_container_type &macro_invocations)
+  noexcept
+{
+  auto e = _lookup(new_end, macro_invocations);
+  switch (_pp_tokens_seqs_origins[e.first]._kind) {
+  case _pp_tokens_seq_origin::_kind::from_raw:
+    if (e.second != 0) {
+      _pp_tokens_seqs_origins[e.first]._source.raw_source.range.end =
+	(_pp_tokens_seqs_origins[e.first]._source.raw_source.range.begin +
+	 e.second);
+      e.first += 1;
+    }
+    break;
+  case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+    // Dropping tails starting in the middle of a macro expansion
+    // is unsupported.
+    assert(e.second == 0);
+    break;
+  }
+  _pp_tokens_seqs_origins.erase(_pp_tokens_seqs_origins.cbegin() + e.first,
+				_pp_tokens_seqs_origins.cend());
+}
+
+
+raw_pp_tokens_range pp_result::_pp_tokens_origins::
+pp_tokens_range_to_raw
+(const pp_tokens_range &range,
+ const _macro_invocations_container_type &macro_invocations,
+ const raw_pp_tokens::size_type raw_pp_tokens_end)
+  const noexcept
+{
+  auto r = _lookup(range, macro_invocations);
+  if (r.first.first == _pp_tokens_seqs_origins.size()) {
+    assert(range.begin == range.end);
+    return raw_pp_tokens_range{raw_pp_tokens_end, raw_pp_tokens_end};
+  }
+  if (r.second.second == 0 && range.begin != range.end) {
+    r.second.first -= 1;
+    r.second.second =
+      _pp_tokens_seqs_origins[r.second.first].out_length(macro_invocations);
+  }
+  assert(r.second.first != _pp_tokens_seqs_origins.size());
+
+  const auto begin = [&]{
+    const auto &head_seq_origin = _pp_tokens_seqs_origins[r.first.first];
+    switch (head_seq_origin._kind) {
+    case _pp_tokens_seq_origin::_kind::from_raw:
+      return (head_seq_origin.get_raw_pp_tokens_range(macro_invocations).begin +
+	      r.first.second);
+
+    case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+      return head_seq_origin.get_raw_pp_tokens_range(macro_invocations).begin;
+    }
+  }();
+
+  const auto end = [&]{
+    const auto &tail_seq_origin = _pp_tokens_seqs_origins[r.second.first];
+    switch (tail_seq_origin._kind) {
+    case _pp_tokens_seq_origin::_kind::from_raw:
+      return (tail_seq_origin.get_raw_pp_tokens_range(macro_invocations).begin +
+	      r.second.second);
+
+    case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+      if (range.begin == range.end && r.second.second == 0) {
+	return begin;
+      } else {
+	return tail_seq_origin.get_raw_pp_tokens_range(macro_invocations).end;
+      }
+    }
+  }();
+
+  return raw_pp_tokens_range{begin, end};
+}
+
+raw_pp_tokens_range pp_result::_pp_tokens_origins::
+pp_token_index_to_raw
+(const pp_token_index tok_index,
+ const _macro_invocations_container_type &macro_invocations,
+ const raw_pp_tokens::size_type raw_pp_tokens_end)
+  const noexcept
+{
+  const auto b = _lookup(tok_index, macro_invocations);
+  if (b.first == _pp_tokens_seqs_origins.size()) {
+    return raw_pp_tokens_range{raw_pp_tokens_end, raw_pp_tokens_end};
+  }
+  const auto head_seq_origin = _pp_tokens_seqs_origins[b.first];
+  switch (head_seq_origin._kind) {
+  case _pp_tokens_seq_origin::_kind::from_raw:
+    return raw_pp_tokens_range{
+      (head_seq_origin.get_raw_pp_tokens_range(macro_invocations).begin +
+       b.second)
+    };
+  case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+    return head_seq_origin.get_raw_pp_tokens_range(macro_invocations);
+  }
+}
+
+pp_tokens_range pp_result::_pp_tokens_origins::
+raw_pp_tokens_range_to_nonraw
+(const raw_pp_tokens_range &raw_range,
+ const _macro_invocations_container_type &macro_invocations,
+ const pp_tokens::size_type pp_tokens_end)
+  const noexcept
+{
+  struct cmp
+  {
+    bool operator()(const _pp_tokens_seq_origin &e,
+		    const raw_pp_tokens_range &raw_range) const noexcept {
+      // For the lower bound.
+      const auto e_raw_range = e.get_raw_pp_tokens_range(macro_invocations);
+      if (e_raw_range.begin >= raw_range.begin)
+	return false;
+      return e_raw_range.end <= raw_range.begin;
+    }
+
+    bool operator()(const raw_pp_tokens_range &raw_range,
+		    const _pp_tokens_seq_origin &e) const noexcept {
+      // For the upper bound.
+      const auto e_raw_range = e.get_raw_pp_tokens_range(macro_invocations);
+      return raw_range.end <= e_raw_range.begin;
+    }
+
+    const _macro_invocations_container_type &macro_invocations;
+  };
+
+  auto r = std::equal_range(_pp_tokens_seqs_origins.cbegin(),
+			    _pp_tokens_seqs_origins.cend(),
+			    raw_range,
+			    cmp {macro_invocations});
+  assert(r.second != r.first ||
+	 (r.second == _pp_tokens_seqs_origins.cend() ||
+	  (raw_range.end <=
+	   r.first->get_raw_pp_tokens_range(macro_invocations).begin)));
+  if (r.second == r.first) {
+    if (r.first == _pp_tokens_seqs_origins.cend()) {
+      return pp_tokens_range{pp_tokens_end, pp_tokens_end};
+    } else {
+      return pp_tokens_range{r.first->_out_begin, r.first->_out_begin};
+    }
+  }
+  assert(r.first != _pp_tokens_seqs_origins.cend());
+  r.second -= 1;
+
+  const auto begin = [&]{
+    switch (r.first->_kind) {
+    case _pp_tokens_seq_origin::_kind::from_raw:
+      if (raw_range.begin >=
+	  r.first->get_raw_pp_tokens_range(macro_invocations).begin) {
+	return (r.first->_out_begin +
+		(raw_range.begin -
+		 r.first->get_raw_pp_tokens_range(macro_invocations).begin));
+      } else {
+	return r.first->_out_begin;
+      }
+
+    case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+      // For raw_pp_tokens_range queries starting in the middle of a macro
+      // invocation, return the full macro expansion output range.
+      return r.first->_out_begin;
+    }
+  }();
+
+  const auto end = [&]{
+    switch (r.first->_kind) {
+    case _pp_tokens_seq_origin::_kind::from_raw:
+      if (raw_range.end <=
+	  r.second->get_raw_pp_tokens_range(macro_invocations).end) {
+	return (r.second->_out_begin +
+		(raw_range.end -
+		 r.second->get_raw_pp_tokens_range(macro_invocations).begin));
+      } else {
+	return r.second->out_end(macro_invocations);
+      }
+
+    case _pp_tokens_seq_origin::_kind::from_macro_expansion:
+      // For raw_pp_tokens_range queries starting in the middle of a macro
+      // invocation, return the full macro expansion output range.
+      return r.second->out_end(macro_invocations);
+    }
+  }();
+
+  return pp_tokens_range{begin, end};
+}
+
+pp_token_index pp_result::_pp_tokens_origins::_total_out_end
+(const _macro_invocations_container_type &macro_invocations)
+  const noexcept
+{
+  if (!_pp_tokens_seqs_origins.empty()) {
+    return _pp_tokens_seqs_origins.back().out_end(macro_invocations);
+  } else {
+    return 0;
+  }
+}
+
+std::pair<pp_result::_pp_tokens_origins::_pp_tokens_seqs_origins_index_type,
+	  std::size_t>
+pp_result::_pp_tokens_origins::_lookup
+(const pp_token_index tok_index,
+ const _macro_invocations_container_type &macro_invocations)
+  const noexcept
+{
+  const auto b = std::lower_bound
+    (_pp_tokens_seqs_origins.cbegin(),
+     _pp_tokens_seqs_origins.cend(),
+     tok_index,
+     [&](const _pp_tokens_seq_origin &e, const pp_token_index tok_index) {
+       // For the lower bound.
+       if (e._out_begin >= tok_index)
+	 return false;
+       return e.out_end(macro_invocations) <= tok_index;
+     });
+  assert(b != _pp_tokens_seqs_origins.cend());
+  assert(b->_out_begin <= tok_index);
+  assert(tok_index < b->out_end(macro_invocations));
+  return std::make_pair(b - _pp_tokens_seqs_origins.cbegin(),
+			tok_index - b->_out_begin);
+}
+
+std::pair<
+  std::pair<pp_result::_pp_tokens_origins::_pp_tokens_seqs_origins_index_type,
+	    std::size_t>,
+  std::pair<pp_result::_pp_tokens_origins::_pp_tokens_seqs_origins_index_type,
+	    std::size_t>
+>
+pp_result::_pp_tokens_origins::_lookup
+(const pp_tokens_range &range,
+ const _macro_invocations_container_type &macro_invocations)
+  const noexcept {
+  struct cmp
+  {
+    bool operator()(const _pp_tokens_seq_origin &e,
+		    const pp_tokens_range &range) const noexcept {
+      // For the lower bound.
+      if (e._out_begin >= range.begin)
+	return false;
+      return e.out_end(macro_invocations) <= range.begin;
+    }
+
+    bool operator()(const pp_tokens_range &range,
+		    const _pp_tokens_seq_origin &e) const noexcept {
+      // For the upper bound.
+      return range.end <= e._out_begin;
+    }
+
+    const _macro_invocations_container_type &macro_invocations;
+  };
+
+  auto r = std::equal_range(_pp_tokens_seqs_origins.cbegin(),
+			    _pp_tokens_seqs_origins.cend(),
+			    range,
+			    cmp {macro_invocations});
+  assert(r.second != r.first ||
+	 (range.begin == range.end &&
+	  (r.second == _pp_tokens_seqs_origins.cend() ||
+	   range.end == r.second->_out_begin)));
+  if (r.second == r.first) {
+    return std::make_pair
+      (std::make_pair(r.second - _pp_tokens_seqs_origins.cbegin(), 0),
+       std::make_pair(r.second - _pp_tokens_seqs_origins.cbegin(), 0));
+  }
+  assert(r.first != _pp_tokens_seqs_origins.cend());
+  assert(r.first->_out_begin <= range.begin);
+
+  const auto begin =
+    std::make_pair(r.first - _pp_tokens_seqs_origins.cbegin(),
+		   range.begin - r.first->_out_begin);
+  auto offset_in_end =
+    range.end - (r.second - 1)->_out_begin;
+  if (offset_in_end == (r.second - 1)->out_length(macro_invocations)) {
+    offset_in_end = 0;
+  } else {
+    r.second -= 1;
+    assert(r.second->out_end(macro_invocations) > range.end);
+  }
+  const auto end =
+    std::make_pair(r.second - _pp_tokens_seqs_origins.cbegin(),
+		   offset_in_end);
+  return std::make_pair(begin, end);
+}
+
+pp_result::_pp_tokens_origins::_pp_tokens_seq_origin::
+_pp_tokens_seq_origin(const pp_token_index out_begin,
+		      const raw_pp_token_index raw_begin,
+		      const from_raw_tag) noexcept
+  : _out_begin(out_begin), _kind(_kind::from_raw),
+    _source({.raw_source = {{raw_begin}}})
+{}
+
+pp_result::_pp_tokens_origins::_pp_tokens_seq_origin::
+_pp_tokens_seq_origin
+(const pp_token_index out_begin,
+ const _macro_invocations_index_type mi_index,
+ const from_macro_expansion_tag) noexcept
+  : _out_begin(out_begin), _kind(_kind::from_macro_expansion),
+    _source({.macro_expansion = {mi_index}})
+{}
+
+
+std::size_t pp_result::_pp_tokens_origins::_pp_tokens_seq_origin::
+out_length(const _macro_invocations_container_type &macro_invocations)
+  const noexcept
+{
+  switch (_kind) {
+  case _kind::from_raw:
+    return _source.raw_source.range.end - _source.raw_source.range.begin;
+
+  case _kind::from_macro_expansion:
+    return (macro_invocations[_source.macro_expansion.mi_index]
+	    ->get_expansion_forest().get_main_tree().total_out_length());
+  }
+}
+
+pp_token_index pp_result::_pp_tokens_origins::_pp_tokens_seq_origin::
+out_end(const _macro_invocations_container_type &macro_invocations)
+  const noexcept
+{
+  return _out_begin + out_length(macro_invocations);
+}
+
+raw_pp_tokens_range pp_result::_pp_tokens_origins::_pp_tokens_seq_origin::
+get_raw_pp_tokens_range
+(const _macro_invocations_container_type &macro_invocations) const noexcept
+{
+  switch (_kind) {
+  case _kind::from_raw:
+    return _source.raw_source.range;
+
+  case _kind::from_macro_expansion:
+    return (macro_invocations[_source.macro_expansion.mi_index]
+	    ->get_source_range());
+  }
 }
 
 
@@ -2577,71 +2964,23 @@ pp_result::get_raw_token_source(const raw_pp_token_index tok_index) const
 const raw_pp_tokens_range
 pp_result::pp_tokens_range_to_raw(const pp_tokens_range &r) const noexcept
 {
-  if (r.begin != r.end) {
-    return raw_pp_tokens_range {
-		_pp_tokens[r.begin].get_token_source().begin,
-		_pp_tokens[r.end - 1].get_token_source().end
-	   };
-  } else if (r.end && r.end != _pp_tokens.size()) {
-    const raw_pp_tokens_range &before =
-      _pp_tokens[r.end - 1].get_token_source();
-    const raw_pp_tokens_range &after =
-      _pp_tokens[r.end].get_token_source();
-    if (before.begin != after.begin) {
-      return raw_pp_tokens_range {
-		_pp_tokens[r.end - 1].get_token_source().end,
-		_pp_tokens[r.end].get_token_source().begin
-	     };
-    } else {
-      // Both, the token before the position as well as the one
-      // after it orginate from the same macro invocation.
-      return raw_pp_tokens_range {
-		before.begin,
-		after.end
-	     };
-    }
-  } else if (r.end) {
-    assert(r.end == _pp_tokens.size() && !_pp_tokens.empty());
-    return raw_pp_tokens_range {
-		_pp_tokens.back().get_token_source().end,
-		_pp_tokens.back().get_token_source().end
-	   };
-  } else if (!_pp_tokens.empty()) {
-    return raw_pp_tokens_range {
-		_pp_tokens.front().get_token_source().begin,
-		_pp_tokens.front().get_token_source().begin
-	   };
-  } else {
-    return raw_pp_tokens_range {
-		_raw_tokens.size(),
-		_raw_tokens.size()
-	   };
-  }
+  return _pp_tokens_origins.pp_tokens_range_to_raw(r, _macro_invocations,
+						   _raw_tokens.size());
+}
+const raw_pp_tokens_range
+pp_result::pp_token_index_to_raw(const pp_token_index tok_index) const noexcept
+{
+  return _pp_tokens_origins.pp_token_index_to_raw(tok_index,
+						  _macro_invocations,
+						  _raw_tokens.size());
 }
 
 const pp_tokens_range
 pp_result::raw_pp_tokens_range_to_nonraw(const raw_pp_tokens_range &r)
   const noexcept
 {
-  struct comp
-  {
-    bool operator()(const pp_token &tok, const raw_pp_tokens_range &r) noexcept
-    {
-      return tok.get_token_source() < r;
-    }
-    bool operator()(const raw_pp_tokens_range &r, const pp_token &tok) noexcept
-    {
-      return r < tok.get_token_source();
-    }
-  };
-
-  const auto toks_range =
-    std::equal_range(_pp_tokens.begin(), _pp_tokens.end(), r, comp{});
-
-  return pp_tokens_range {
-    static_cast<pp_token_index>(toks_range.first - _pp_tokens.begin()),
-    static_cast<pp_token_index>(toks_range.second - _pp_tokens.begin())
-   };
+  return _pp_tokens_origins.raw_pp_tokens_range_to_nonraw(r, _macro_invocations,
+							  _pp_tokens.size());
 }
 
 void pp_result::_enter_root(header_inclusion_root &hir,
@@ -2854,6 +3193,7 @@ pp_result::_drop_pp_tokens_tail(const pp_tokens::size_type new_end)
     }
   }
 
+  _pp_tokens_origins.drop_pp_tokens_tail(new_end, _macro_invocations);
   _macro_invocations.erase((_macro_invocations.begin() +
 			    (mis_range.first._it -
 			     _macro_invocations.cbegin())),

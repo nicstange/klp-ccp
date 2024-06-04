@@ -1041,22 +1041,31 @@ pp_token_index preprocessor::read_next_token()
     return _emit_pp_token(*_pp_result, std::move(tok));
   }
 
-  auto tok = _read_next_plain_token(_read_ctl::normal);
-  if (tok.is_id()) {
+  auto raw_tok = _read_next_plain_token(_read_ctl::normal);
+  const auto raw_tok_index = raw_tok.get_token_source().begin;
+  if (raw_tok.is_id()) {
     auto &&expansion_result =
-      _try_expand(tok.get_token_source().begin,
+      _try_expand(raw_tok_index,
 		  std::bind(&preprocessor::_read_next_plain_token,
 			    this, std::placeholders::_1),
 		  false);
 
     if (expansion_result.first) {
+      _pp_result->_pp_tokens_origins.append
+	(_pp_result->_macro_invocations.size() - 1,
+	 _pp_result->_macro_invocations,
+	 pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
       for (auto &&t : expansion_result.second)
 	_expanded_tokens.emplace(std::move(t));
       goto from_expansion;
     }
   }
 
-  return _emit_pp_token(*_pp_result, std::move(tok));
+  _pp_result->_pp_tokens_origins.append
+    (raw_tok_index, _pp_result->_macro_invocations,
+     pp_result::_pp_tokens_origins::from_raw_tag{});
+
+  return _emit_pp_token(*_pp_result, std::move(raw_tok));
 }
 
 std::pair<bool, std::vector<preprocessor::_pp_token>>
@@ -2430,21 +2439,28 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
       = _pp_result->get_pp_tokens().size();
     while (true) {
       auto &&raw_tok = read_tok(_read_ctl::normal);
+      const auto raw_tok_index = raw_tok.get_token_source().begin;
       if (raw_tok.is_id()) {
 	auto &&expansion_result = _try_expand(raw_tok.get_token_source().begin,
 					      read_tok, false);
 	if (expansion_result.first) {
+	  _pp_result->_pp_tokens_origins.append
+	    (_pp_result->_macro_invocations.size() - 1,
+	     _pp_result->_macro_invocations,
+	     pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
 	  for (auto &&t : expansion_result.second)
 	    _emit_pp_token(*_pp_result, std::move(t));
-	} else {
-	  _emit_pp_token(*_pp_result, std::move(raw_tok));
+	  continue;
 	}
-      } else if (raw_tok.is_eof()) {
-	_emit_pp_token(*_pp_result, std::move(raw_tok));
-	break;
-      } else {
-	_emit_pp_token(*_pp_result, std::move(raw_tok));
       }
+
+      _pp_result->_pp_tokens_origins.append
+	(raw_tok_index, _pp_result->_macro_invocations,
+	 pp_result::_pp_tokens_origins::from_raw_tag{});
+      _emit_pp_token(*_pp_result, std::move(raw_tok));
+
+      if (raw_tok.is_eof())
+	break;
     }
 
     auto skip = [&] (pp_tokens::const_iterator it) {
@@ -2644,21 +2660,28 @@ _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
     = _pp_result->get_pp_tokens().size();
   while (true) {
     auto &&raw_tok = read_tok(_read_ctl::normal);
+    const auto raw_tok_index = raw_tok.get_token_source().begin;
     if (raw_tok.is_id()) {
       auto &&expansion_result = _try_expand(raw_tok.get_token_source().begin,
 					    read_tok, true);
       if (expansion_result.first) {
+	_pp_result->_pp_tokens_origins.append
+	  (_pp_result->_macro_invocations.size() - 1,
+	   _pp_result->_macro_invocations,
+	   pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
 	for (auto &&t : expansion_result.second)
 	  _emit_pp_token(*_pp_result, std::move(t));
-      } else {
-	_emit_pp_token(*_pp_result, std::move(raw_tok));
+	continue;
       }
-    } else if (raw_tok.is_eof()) {
-      _emit_pp_token(*_pp_result, std::move(raw_tok));
-      break;
-    } else {
-      _emit_pp_token(*_pp_result, std::move(raw_tok));
     }
+
+    _pp_result->_pp_tokens_origins.append
+      (raw_tok_index, _pp_result->_macro_invocations,
+       pp_result::_pp_tokens_origins::from_raw_tag{});
+    _emit_pp_token(*_pp_result, std::move(raw_tok));
+
+    if (raw_tok.is_eof())
+      break;
   }
 
   pp_tokens::size_type read_token_index = temp_tokens_tail_begin;

@@ -642,6 +642,7 @@ namespace klp
 	      }
 
 	    private:
+	      friend class expansion_forest;
 	      friend class _forest_nodes;
 	      friend class preprocessor;
 
@@ -1236,6 +1237,8 @@ namespace klp
 	    std::size_t total_out_length() const;
 
 	  private:
+	    friend class expansion_forest;
+
 	    rescan_subtree(const _rescan_macro_invocation_ref &subtree_root)
 	      noexcept;
 
@@ -1245,6 +1248,8 @@ namespace klp
 	  expansion_forest(const macro &m,
 			   const std::size_t src_begin,
 			   const std::size_t src_length);
+
+	  const rescan_subtree get_main_tree() const noexcept;
 
 	private:
 	  friend class preprocessor;
@@ -1256,6 +1261,9 @@ namespace klp
 	expansion_forest _expansion_forest;
 
       public:
+	const expansion_forest& get_expansion_forest() const noexcept
+	{ return _expansion_forest; }
+
 	class passed_through_arg_token
 	{
 	public:
@@ -1419,7 +1427,135 @@ namespace klp
       find_overlapping_macro_invocations(const raw_pp_tokens_range &r)
 	const noexcept;
 
+    private:
+      class _pp_tokens_origins {
+      private:
+	typedef _macro_invocations_container_type::size_type
+	  _macro_invocations_index_type;
 
+      public:
+	struct from_raw_tag {};
+	struct from_macro_expansion_tag {};
+
+	_pp_tokens_origins() noexcept;
+
+	_pp_tokens_origins(_pp_tokens_origins &&rhs) noexcept;
+
+	~_pp_tokens_origins() noexcept;
+
+	void append(const raw_pp_token_index raw_index,
+		    const _macro_invocations_container_type &macro_invocations,
+		    const from_raw_tag);
+
+	void append(const _macro_invocations_index_type mi_index,
+		    const _macro_invocations_container_type &macro_invocations,
+		    const from_macro_expansion_tag);
+
+	void drop_pp_tokens_tail
+	  (const pp_token_index new_end,
+	   const _macro_invocations_container_type &macro_invocations)
+	  noexcept;
+
+	raw_pp_tokens_range pp_tokens_range_to_raw
+	  (const pp_tokens_range &range,
+	   const _macro_invocations_container_type &macro_invocations,
+	   const raw_pp_tokens::size_type raw_pp_tokens_end)
+	  const noexcept;
+
+	raw_pp_tokens_range pp_token_index_to_raw
+	  (const pp_token_index tok_index,
+	   const _macro_invocations_container_type &macro_invocations,
+	   const raw_pp_tokens::size_type raw_pp_tokens_end)
+	  const noexcept;
+
+	pp_tokens_range
+	raw_pp_tokens_range_to_nonraw
+	  (const raw_pp_tokens_range &raw_range,
+	   const _macro_invocations_container_type &macro_invocations,
+	   const pp_tokens::size_type pp_tokens_end)
+	  const noexcept;
+
+      private:
+	friend class pp_result;
+
+	struct _pp_tokens_seq_origin {
+	  _pp_tokens_seq_origin(const pp_token_index out_begin,
+				const raw_pp_token_index raw_begin,
+				const from_raw_tag) noexcept;
+
+	  _pp_tokens_seq_origin
+	  (const pp_token_index out_begin,
+	   const _macro_invocations_index_type mi_index,
+	   const from_macro_expansion_tag) noexcept;
+
+	  std::size_t
+	  out_length(const _macro_invocations_container_type &macro_invocations)
+	    const noexcept;
+
+	  pp_token_index
+	  out_end(const _macro_invocations_container_type &macro_invocations)
+	    const noexcept;
+
+	  raw_pp_tokens_range get_raw_pp_tokens_range
+	    (const _macro_invocations_container_type &macro_invocations)
+	    const noexcept;
+
+	  enum class _kind
+	  {
+	    from_raw,
+	    from_macro_expansion,
+	  };
+
+	  struct _raw_source
+	  {
+	    raw_pp_tokens_range range;
+	  };
+
+	  struct _macro_expansion_source
+	  {
+	    _macro_invocations_index_type mi_index;
+	  };
+
+	  union _source
+	  {
+	    _raw_source raw_source;
+	    _macro_expansion_source macro_expansion;
+	  };
+
+	  pp_token_index _out_begin;
+	  _kind _kind;
+	  _source _source;
+	};
+
+	typedef std::vector<_pp_tokens_seq_origin>
+	  _pp_tokens_seqs_origins_container_type;
+
+	typedef _pp_tokens_seqs_origins_container_type::size_type
+	  _pp_tokens_seqs_origins_index_type;
+
+	pp_token_index _total_out_end
+	(const _macro_invocations_container_type &macro_invocations)
+	  const noexcept;
+
+	std::pair<_pp_tokens_seqs_origins_index_type, std::size_t>
+	_lookup
+	(const pp_token_index tok_index,
+	 const _macro_invocations_container_type &macro_invocations)
+	  const noexcept;
+
+	std::pair<
+	  std::pair<_pp_tokens_seqs_origins_index_type, std::size_t>,
+	  std::pair<_pp_tokens_seqs_origins_index_type, std::size_t>
+	>
+	_lookup
+	(const pp_tokens_range &range,
+	 const _macro_invocations_container_type &macro_invocations)
+	  const noexcept;
+
+	_pp_tokens_seqs_origins_container_type _pp_tokens_seqs_origins;
+      };
+
+    public:
       class header_inclusion_node;
       class header_inclusion_child;
       class conditional_inclusion_node;
@@ -2131,6 +2267,9 @@ namespace klp
       const raw_pp_tokens_range
       pp_tokens_range_to_raw(const pp_tokens_range &r) const noexcept;
 
+      const raw_pp_tokens_range
+      pp_token_index_to_raw(const pp_token_index tok_index) const noexcept;
+
       const pp_tokens_range
       raw_pp_tokens_range_to_nonraw(const raw_pp_tokens_range &r)
 	const noexcept;
@@ -2201,6 +2340,7 @@ namespace klp
       header_inclusion_roots _header_inclusion_roots;
       raw_pp_tokens _raw_tokens;
       pp_tokens _pp_tokens;
+      _pp_tokens_origins _pp_tokens_origins;
 
       _directives_container_type _directives;
       _macros_container_type _macros;
