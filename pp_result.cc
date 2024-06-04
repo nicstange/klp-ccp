@@ -1552,6 +1552,63 @@ expansion_forest::rescan_subtree::final_out_end() const
   };
 }
 
+std::size_t expansion_forest::rescan_subtree::total_src_length() const
+{
+  std::size_t total_src_length = 0;
+  const _forest_nodes &forest = _subtree_root.get_forest();
+  const _forest_nodes::size_type subtree_root = _subtree_root.get_node();
+
+  _forest_nodes::size_type rightmost =
+    forest.last_rescan_subtree_dfs_pre_node(subtree_root);
+  while (rightmost != subtree_root) {
+    const _rescan_macro_invocation &child = forest[rightmost];
+    const _forest_nodes::size_type parent = child.get_rescan_parent();
+    assert(parent != _forest_nodes::size_type::invalid());
+    assert(child.src_begin() < forest[parent].out_length());
+
+    total_src_length += child.src_length();
+    total_src_length -=
+      std::min(total_src_length,
+	       forest[parent].out_length() - child.src_begin());
+
+    rightmost = parent;
+  }
+
+  total_src_length += forest[rightmost].src_length();
+
+  return total_src_length;
+}
+
+std::size_t expansion_forest::rescan_subtree::total_out_length() const
+{
+  std::size_t total_out_length = 0;
+  const _forest_nodes &forest = _subtree_root.get_forest();
+  const _forest_nodes::size_type subtree_root = _subtree_root.get_node();
+  for (auto node = subtree_root;
+       node != _forest_nodes::size_type::invalid();
+       node = forest.next_rescan_subtree_dfs_pre_node(subtree_root, node)) {
+    auto src_begin = forest[node].src_begin();
+    auto remaining_src_len = forest[node].src_length();
+    auto ancestor_node = node;
+    while (remaining_src_len != 0 && ancestor_node != subtree_root) {
+      ancestor_node = forest[ancestor_node].get_rescan_parent();
+      const auto &ancestor = forest[ancestor_node];
+      if (ancestor.out_length() > src_begin) {
+	const auto consumed_from_ancestor =
+	  std::min(ancestor.out_length() - src_begin, remaining_src_len);
+	total_out_length -= consumed_from_ancestor;
+	remaining_src_len -= consumed_from_ancestor;
+	src_begin += consumed_from_ancestor;
+      }
+      assert(src_begin >= ancestor.out_length() || remaining_src_len == 0);
+      src_begin -= ancestor.out_length();
+      src_begin += ancestor.src_begin() + ancestor.src_length();
+    }
+    total_out_length += forest[node].out_length();
+  }
+  return total_out_length;
+}
+
 
 pp_result::inclusion_node::inclusion_node()
   : _parent(nullptr)

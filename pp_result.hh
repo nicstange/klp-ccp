@@ -1232,6 +1232,9 @@ namespace klp
 	    const_final_out_iterator final_out_begin() const;
 	    const_final_out_iterator final_out_end() const;
 
+	    std::size_t total_src_length() const;
+	    std::size_t total_out_length() const;
+
 	  private:
 	    rescan_subtree(const _rescan_macro_invocation_ref &subtree_root)
 	      noexcept;
