@@ -1703,13 +1703,13 @@ drop_pp_tokens_tail(const pp_tokens::size_type new_end,
 raw_pp_tokens_range pp_result::_pp_tokens_origins::
 pp_tokens_range_to_raw
 (const pp_tokens_range &range,
- const _macro_invocations_container_type &macro_invocations,
- const raw_pp_tokens::size_type raw_pp_tokens_end)
+ const _macro_invocations_container_type &macro_invocations)
   const noexcept
 {
   auto r = _lookup(range, macro_invocations);
   if (r.first.first == _pp_tokens_seqs_origins.size()) {
     assert(range.begin == range.end);
+    const auto raw_pp_tokens_end = _total_raw_end(macro_invocations);
     return raw_pp_tokens_range{raw_pp_tokens_end, raw_pp_tokens_end};
   }
   if (r.second.second == 0 && range.begin != range.end) {
@@ -1753,12 +1753,12 @@ pp_tokens_range_to_raw
 raw_pp_tokens_range pp_result::_pp_tokens_origins::
 pp_token_index_to_raw
 (const pp_token_index tok_index,
- const _macro_invocations_container_type &macro_invocations,
- const raw_pp_tokens::size_type raw_pp_tokens_end)
+ const _macro_invocations_container_type &macro_invocations)
   const noexcept
 {
   const auto b = _lookup(tok_index, macro_invocations);
   if (b.first == _pp_tokens_seqs_origins.size()) {
+    const auto raw_pp_tokens_end = _total_raw_end(macro_invocations);
     return raw_pp_tokens_range{raw_pp_tokens_end, raw_pp_tokens_end};
   }
   const auto head_seq_origin = _pp_tokens_seqs_origins[b.first];
@@ -1776,8 +1776,7 @@ pp_token_index_to_raw
 pp_tokens_range pp_result::_pp_tokens_origins::
 raw_pp_tokens_range_to_nonraw
 (const raw_pp_tokens_range &raw_range,
- const _macro_invocations_container_type &macro_invocations,
- const pp_tokens::size_type pp_tokens_end)
+ const _macro_invocations_container_type &macro_invocations)
   const noexcept
 {
   struct cmp
@@ -1811,6 +1810,7 @@ raw_pp_tokens_range_to_nonraw
 	   r.first->get_raw_pp_tokens_range(macro_invocations).begin)));
   if (r.second == r.first) {
     if (r.first == _pp_tokens_seqs_origins.cend()) {
+      const auto pp_tokens_end = _total_out_end(macro_invocations);
       return pp_tokens_range{pp_tokens_end, pp_tokens_end};
     } else {
       return pp_tokens_range{r.first->_out_begin, r.first->_out_begin};
@@ -1864,8 +1864,7 @@ std::pair<std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>,
 	  std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>>
 pp_result::_pp_tokens_origins::find_overlapping_macro_invocations
 (const pp_tokens_range &range,
- const _macro_invocations_container_type &macro_invocations,
- const pp_tokens::size_type pp_tokens_end)
+ const _macro_invocations_container_type &macro_invocations)
   const noexcept
 {
   auto r = _lookup(range, macro_invocations);
@@ -1883,9 +1882,9 @@ pp_result::_pp_tokens_origins::find_overlapping_macro_invocations
     return
       std::make_pair
       (std::make_pair(const_macro_invocation_iterator{macro_invocations.cend()},
-		      pp_tokens_end),
+		      std::numeric_limits<pp_token_index>::max()),
        std::make_pair(const_macro_invocation_iterator{macro_invocations.cend()},
-		      pp_tokens_end));
+		      std::numeric_limits<pp_token_index>::max()));
   }
 
   const auto it_last_mi = std::find_if
@@ -1922,6 +1921,19 @@ pp_token_index pp_result::_pp_tokens_origins::_total_out_end
     return 0;
   }
 }
+
+raw_pp_token_index pp_result::_pp_tokens_origins::_total_raw_end
+(const _macro_invocations_container_type &macro_invocations)
+  const noexcept
+{
+  if (!_pp_tokens_seqs_origins.empty()) {
+    return (_pp_tokens_seqs_origins.back()
+	    .get_raw_pp_tokens_range(macro_invocations).end);
+  } else {
+    return 0;
+  }
+}
+
 
 std::pair<pp_result::_pp_tokens_origins::_pp_tokens_seqs_origins_index_type,
 	  std::size_t>
@@ -1997,7 +2009,10 @@ pp_result::_pp_tokens_origins::_lookup
 		   range.begin - r.first->_out_begin);
   auto offset_in_end =
     range.end - (r.second - 1)->_out_begin;
-  if (offset_in_end == (r.second - 1)->out_length(macro_invocations)) {
+  if (offset_in_end >= (r.second - 1)->out_length(macro_invocations)) {
+    // All but the very last special EOF token should be associated
+    // with some raw_pp_token.
+    assert(offset_in_end <= (r.second - 1)->out_length(macro_invocations) + 1);
     offset_in_end = 0;
   } else {
     r.second -= 1;
@@ -2990,8 +3005,7 @@ pp_result::find_overlapping_macro_invocations(const pp_tokens_range &r)
 {
   return
     _pp_tokens_origins.find_overlapping_macro_invocations(r,
-							  _macro_invocations,
-							  _pp_tokens.size());
+							  _macro_invocations);
 }
 
 pp_result::const_intersecting_source_iterator
@@ -3041,23 +3055,21 @@ pp_result::get_raw_token_source(const raw_pp_token_index tok_index) const
 const raw_pp_tokens_range
 pp_result::pp_tokens_range_to_raw(const pp_tokens_range &r) const noexcept
 {
-  return _pp_tokens_origins.pp_tokens_range_to_raw(r, _macro_invocations,
-						   _raw_tokens.size());
+  return _pp_tokens_origins.pp_tokens_range_to_raw(r, _macro_invocations);
 }
 const raw_pp_tokens_range
 pp_result::pp_token_index_to_raw(const pp_token_index tok_index) const noexcept
 {
   return _pp_tokens_origins.pp_token_index_to_raw(tok_index,
-						  _macro_invocations,
-						  _raw_tokens.size());
+						  _macro_invocations);
 }
 
 const pp_tokens_range
 pp_result::raw_pp_tokens_range_to_nonraw(const raw_pp_tokens_range &r)
   const noexcept
 {
-  return _pp_tokens_origins.raw_pp_tokens_range_to_nonraw(r, _macro_invocations,
-							  _pp_tokens.size());
+  return _pp_tokens_origins.raw_pp_tokens_range_to_nonraw(r,
+							  _macro_invocations);
 }
 
 void pp_result::_enter_root(header_inclusion_root &hir,

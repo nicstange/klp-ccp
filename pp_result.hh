@@ -1466,29 +1466,25 @@ namespace klp
 
 	raw_pp_tokens_range pp_tokens_range_to_raw
 	  (const pp_tokens_range &range,
-	   const _macro_invocations_container_type &macro_invocations,
-	   const raw_pp_tokens::size_type raw_pp_tokens_end)
+	   const _macro_invocations_container_type &macro_invocations)
 	  const noexcept;
 
 	raw_pp_tokens_range pp_token_index_to_raw
 	  (const pp_token_index tok_index,
-	   const _macro_invocations_container_type &macro_invocations,
-	   const raw_pp_tokens::size_type raw_pp_tokens_end)
+	   const _macro_invocations_container_type &macro_invocations)
 	  const noexcept;
 
 	pp_tokens_range
 	raw_pp_tokens_range_to_nonraw
 	  (const raw_pp_tokens_range &raw_range,
-	   const _macro_invocations_container_type &macro_invocations,
-	   const pp_tokens::size_type pp_tokens_end)
+	   const _macro_invocations_container_type &macro_invocations)
 	  const noexcept;
 
 	std::pair<std::pair<const_macro_invocation_iterator, pp_token_index>,
 		  std::pair<const_macro_invocation_iterator, pp_token_index>>
 	find_overlapping_macro_invocations
 	  (const pp_tokens_range &range,
-	   const _macro_invocations_container_type &macro_invocations,
-	   const pp_tokens::size_type pp_tokens_end)
+	   const _macro_invocations_container_type &macro_invocations)
 	  const noexcept;
 
       private:
@@ -1550,6 +1546,10 @@ namespace klp
 	  _pp_tokens_seqs_origins_index_type;
 
 	pp_token_index _total_out_end
+	(const _macro_invocations_container_type &macro_invocations)
+	  const noexcept;
+
+	raw_pp_token_index _total_raw_end
 	(const _macro_invocations_container_type &macro_invocations)
 	  const noexcept;
 
