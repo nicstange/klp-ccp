@@ -449,9 +449,8 @@ _directive_range_to_pos_in_chunk(const raw_pp_tokens_range &directive_range,
   // raw_pp_tokens_range can be encountered within some (func-like)
   // macro invocation and there is no well-defined point within the
   // expanded pp_token sequence corresponding to the directive. In
-  // this case the first in-chunk position associated with the the
-  // macro invocation's raw_pp_tokens_range will be returned. This is
-  // the position of either of
+  // this case the first in-chunk position associated with the macro
+  // invocation will be returned. This is the position of either of
   // - some non-copy op like replace or insert* spanning at most a
   //   single pp_token,
   // - a copy op's first pp_token originating from the the spanning
@@ -496,19 +495,13 @@ _directive_range_to_pos_in_chunk(const raw_pp_tokens_range &directive_range,
   // (func-like) macro invocation, this pp_token will be the first one
   // within the copy op range stemming from said macro expansion.
   const pp_tokens_range &op_range= overlapping_ops.first->r;
-  const pp_tokens &toks = pp_result.get_pp_tokens();
-  const auto it_tok =
-    std::lower_bound(toks.begin() + op_range.begin,
-		     toks.begin() + op_range.end,
-		     directive_range,
-		     [](const pp_token &tok, const raw_pp_tokens_range &r) {
-		       return tok.get_token_source() < r;
-		     });
-  assert(it_tok != toks.end());
+  const auto first_tok_not_before_index =
+    pp_result.raw_pp_tokens_range_to_nonraw(directive_range).begin;
+  assert(first_tok_not_before_index != pp_result.get_pp_tokens().size());
   return _pos_in_chunk {
 	   static_cast<_ops_type::size_type>(overlapping_ops.first -
 					     _ops.begin()),
-	   static_cast<pp_token_index>(it_tok - toks.begin())
+	   first_tok_not_before_index
 	 };
 }
 
@@ -754,7 +747,7 @@ _insert_cond_incl_transition(const pp_result::conditional_inclusion_node &c,
   assert(it_op == _ops.begin() + first_pos_not_less.op);
   const pp_token_index insertion_pos = first_pos_not_less.tok;
   const raw_pp_tokens_range &tok_range_raw =
-    toks[insertion_pos].get_token_source();
+    pp_result.pp_token_index_to_raw(insertion_pos);
   if (!(range_raw < tok_range_raw))
     op_range_raw = tok_range_raw;
 
@@ -774,6 +767,7 @@ bool depreprocessor::transformed_input_chunk::
 _find_macro_constraints(const pp_result &pp_result,
 			bool next_raw_tok_is_opening_parenthesis)
 {
+
   // First, try to enlarge copy ops to include any leading or trailing
   // empty tokens coming from an overlapping macro invocation.
   const pp_tokens &toks = pp_result.get_pp_tokens();
@@ -783,20 +777,19 @@ _find_macro_constraints(const pp_result &pp_result,
 
     pp_tokens_range r = op.r;
     assert(r.begin != r.end);
+    const auto mis = pp_result.find_overlapping_macro_invocations(r);
+    if (mis.first.first == pp_result.macro_invocations_end()) {
+      continue;
+    }
+
     bool non_empty_found = false;
-    while (!non_empty_found &&
-	   r.begin &&
-	   (toks[r.begin - 1].get_token_source().begin ==
-	    toks[r.begin].get_token_source().begin)) {
+    while (!non_empty_found && r.begin > mis.first.second) {
       --r.begin;
       if (!toks[r.begin].is_type_any_of<pp_token::type::empty>())
 	non_empty_found = true;
     }
 
-    while (!non_empty_found &&
-	   r.end < toks.size() &&
-	   (toks[r.end - 1].get_token_source().begin ==
-	    toks[r.end].get_token_source().begin)) {
+    while (!non_empty_found && r.end < mis.second.second) {
       if (!toks[r.end].is_type_any_of<pp_token::type::empty>())
 	non_empty_found = true;
       ++r.end;
@@ -806,8 +799,10 @@ _find_macro_constraints(const pp_result &pp_result,
       op.r = r;
   }
 
-  const raw_pp_tokens_range range_raw = _get_range_raw(pp_result);
-  const auto mis = pp_result.find_overlapping_macro_invocations(range_raw);
+  const auto mis = [&]() {
+    const auto mis = pp_result.find_overlapping_macro_invocations(_get_range());
+    return std::make_pair(mis.first.first, mis.second.first);
+  }();
 
   // First try to turn expanded token replacement ops into macro
   // argument rewrite ops, if possible.
@@ -912,15 +907,17 @@ _find_macro_constraints(const pp_result &pp_result,
 
 	  const pp_token_index cur_tok_index = _cur_tok_index - 1;
 	  const pp_tokens &toks = pp_result.get_pp_tokens();
-	  const pp_token &cur_tok = toks[cur_tok_index];
 
 	  // Ignore all macro invocations after the current token if
 	  // they are located after the copy op alltogether or are
 	  // part of some preprocessor directive within the copy op's
 	  // range, which won't get emitted.
-	  while (_it_mi != mis.first &&
-		 (cur_tok.get_token_source() <
-		  (_it_mi - 1)->get_source_range())) {
+	  pp_tokens_range mi_output_range;
+	  while (_it_mi != mis.first) {
+	    mi_output_range = (_it_mi - 1)->get_output_range(pp_result);
+	    if (cur_tok_index >= mi_output_range.begin)
+	      break;
+
 	    const raw_pp_tokens_range &mi_range_raw =
 	      (_it_mi - 1)->get_source_range();
 
@@ -942,28 +939,31 @@ _find_macro_constraints(const pp_result &pp_result,
 	    }
 	  }
 
-	  if (_it_mi == mis.first ||
-	      ((_it_mi - 1)->get_source_range() < cur_tok.get_token_source())) {
+	  if (_it_mi == mis.first || mi_output_range.end <= cur_tok_index) {
 	    // The current pp_token is not from any macro invocation.
 	    // Add macro_nondef constraints as appropriate.
-	    handle_nonexpanded_token(cur_tok, cur_tok_index);
-	    --_cur_tok_index;
+	    // Do the full batch until arriving at the next macro invocation
+	    // again, if any.
+	    const auto batch_begin =
+	      std::max(it_op->r.begin,
+		       _it_mi != mis.first ? mi_output_range.end : 0);
+	    while (_cur_tok_index != batch_begin) {
+	      handle_nonexpanded_token(toks[cur_tok_index], cur_tok_index);
+	      --_cur_tok_index;
+	    }
 
 	  } else {
-	    // The current pp_token within the copy op's range comes
-	    // from some macro expansion. See if the macro invocation
-	    // can be retained.
+	    // Either the current pp_token within the copy op's range
+	    // comes from some macro expansion, or there's a macro
+	    // expansion not overlapping with a directive after
+	    // it. See if the macro invocation can be retained.
 	    const auto it_mi = _it_mi - 1;
-	    const pp_tokens_range invocation_range =
-	      (pp_result.raw_pp_tokens_range_to_nonraw
-	       (it_mi->get_source_range()));
-
-	    if (invocation_range.is_contained_in(it_op->r)) {
+	    if (mi_output_range.is_contained_in(it_op->r)) {
 	      // This macro invocation is completely contained within some
 	      // copied range and can be retained.
 	      const _pos_in_chunk mi_pos{
 			static_cast<_ops_type::size_type>(it_op - _ops.begin()),
-			invocation_range.begin
+			mi_output_range.begin
 	      };
 
 	      for (const pp_result::macro &m : it_mi->get_used_macros())
@@ -983,14 +983,14 @@ _find_macro_constraints(const pp_result &pp_result,
 	      // original context, that might be too lax and have
 	      // ->func_like_allowed set.
 	      if (next_raw_tok_is_opening_parenthesis) {
-		auto non_ws_end = invocation_range.end;
-		while (non_ws_end != invocation_range.begin &&
+		auto non_ws_end = mi_output_range.end;
+		while (non_ws_end != mi_output_range.begin &&
 		       (toks[non_ws_end - 1]
 			.is_type_any_of<pp_token::type::ws,
 					pp_token::type::newline>())) {
 		  --non_ws_end;
 		}
-		if (non_ws_end != invocation_range.begin &&
+		if (non_ws_end != mi_output_range.begin &&
 		    toks[non_ws_end - 1].is_id()) {
 		  const std::string &id = toks[non_ws_end - 1].get_value();
 
@@ -1013,7 +1013,7 @@ _find_macro_constraints(const pp_result &pp_result,
 	      }
 
 	      --_it_mi;
-	      _cur_tok_index = invocation_range.begin;
+	      _cur_tok_index = mi_output_range.begin;
 	      next_raw_tok_is_opening_parenthesis = false;
 
 	    } else {
@@ -1023,8 +1023,8 @@ _find_macro_constraints(const pp_result &pp_result,
 
 	      // Crop the macro invocation range to the copied range.
 	      const pp_tokens_range intersecting_range{
-		std::max(invocation_range.begin, it_op->r.begin),
-		std::min(invocation_range.end, it_op->r.end)
+		std::max(mi_output_range.begin, it_op->r.begin),
+		std::min(mi_output_range.end, it_op->r.end)
 	      };
 
 	      // Add a record that the expanded tokens in this range
@@ -1042,10 +1042,10 @@ _find_macro_constraints(const pp_result &pp_result,
 		--_cur_tok_index;
 	      }
 
-	      // The invocation_range might also overlap with some
+	      // The mi_output_range might also overlap with some
 	      // preceeding copy operation. Give it a chance to
 	      // record the intersection if that's the case.
-	      if (invocation_range.begin >= it_op->r.begin)
+	      if (mi_output_range.begin >= it_op->r.begin)
 		--_it_mi;
 	    }
 	  }
@@ -1221,8 +1221,7 @@ _try_rewrite_macro_arguments(const pp_result &pp_result,
   if (overlapping_ops.first == overlapping_ops.second)
     return;
 
-  const pp_tokens_range expanded_r =
-    pp_result.raw_pp_tokens_range_to_nonraw(range_raw);
+  const pp_tokens_range expanded_r = mi.get_output_range(pp_result);
   if (!(overlapping_ops.first->r.begin <= expanded_r.begin) ||
       !((overlapping_ops.second - 1)->r.end >= expanded_r.end))
     return;
@@ -1821,11 +1820,11 @@ _write(source_writer &writer, _output_state &state,
 	    // See if the first token will get emitted expanded or
 	    // not.
 	    if (it_range_to_emit_expanded == _ranges_to_emit_expanded.cend() ||
-		next_pos.tok <= it_range_to_emit_expanded->begin) {
-	      const raw_pp_tokens_range tok_range_raw =
-		next_tok.get_token_source();
+		next_pos.tok < it_range_to_emit_expanded->begin) {
+	      const raw_pp_tokens_range next_tok_index_raw =
+		pp_result.pp_token_index_to_raw(next_pos.tok);
 	      const raw_pp_token &raw_next_tok =
-		pp_result.get_raw_tokens()[tok_range_raw.begin];
+		pp_result.get_raw_tokens()[next_tok_index_raw.begin];
 	      skip_insert_ws = (raw_next_tok.is_punctuator(")") ||
 				raw_next_tok.is_punctuator("]") ||
 				raw_next_tok.is_punctuator("}") ||
@@ -2113,28 +2112,43 @@ get_range_raw(const pp_result &pp_result)
   case action::insert:
     /* fall through */
   case action::insert_ws:
-    // Point pp_token_ranges get mapped mapped to raw_pp_tokens_ranges
-    // spanning everything inbetween the preceeding and the subsequent
-    // pp_token. Use the stickiness flag to determine which end of
-    // that raw range to pick.
+    // The mapping of point pp_token_ranges to a position within the
+    // raw_pp_tokens sequence might not be well-defined:
+    // - the insertion point might be in the middle of a pp_tokens sequence
+    //   emerging from some macro invocation.
+    // - the pp_tokens before and after the position might be separated
+    //   by preprocessor directives in the input.
+    // In the latter case, use the stickiness for disambiguation.
+    // Note that pp_result::pp_tokens_range_to_raw() would return the
+    // raw_pp_token_index corresponding to the beginning of the next pp_token
+    // subsequent to the insertion position in this case.
     {
       const pp_tokens &toks = pp_result.get_pp_tokens();
       assert(r.begin == r.end);
-      if (r.begin && r.begin < toks.size() &&
-	  toks[r.begin - 1].get_token_source().begin ==
-	  toks[r.begin].get_token_source().begin) {
-	// The preceeding and subsequent pp_tokens from the input
-	// originate from the same macro invocation. Return its
-	// associated raw_pp_tokens_range.
-	return pp_result.pp_tokens_range_to_raw(r);
+      const auto raw_range = pp_result.pp_tokens_range_to_raw(r);
+      if (raw_range.begin != raw_range.end) {
+	// The position is in the middle of some macro expansion ouput.
+	// Return the macro invocation's whole range.
+	return raw_range;
       }
-      raw_pp_tokens_range raw_range = pp_result.pp_tokens_range_to_raw(r);
       switch (stickiness) {
       case sticky_side::left:
-	return raw_pp_tokens_range{raw_range.begin, raw_range.begin};
+	{
+	  if (r.begin > 0) {
+	    // Determine the raw_pp_token_index corresponding to the end
+	    // of the pp_token right before the insertion point, if any.
+	    const auto left_raw_end =
+	      pp_result.pp_tokens_range_to_raw(pp_tokens_range{
+						 r.begin - 1, r.end
+					       }).end;
+	    return raw_pp_tokens_range{left_raw_end, left_raw_end};
+	  } else {
+	    return raw_range;
+	  }
+	}
 
       case sticky_side::right:
-	return raw_pp_tokens_range{raw_range.end, raw_range.end};
+	return raw_range;
 
       case sticky_side::none:
 	assert(0);
@@ -2377,59 +2391,59 @@ find_macro_constraints(const pp_result &pp_result)
   auto it_mi = mis.first;
   const pp_tokens_range header_range =
     pp_result.raw_pp_tokens_range_to_nonraw(header_range_raw);
-  const auto tok_begin = pp_result.get_pp_tokens().begin() + header_range.begin;
-  const auto tok_end = pp_result.get_pp_tokens().begin() + header_range.end;
-  auto it_tok = tok_begin;
-  while (it_tok != tok_end) {
-    if (it_mi != mis.second &&
-	!(it_tok->get_token_source() < it_mi->get_source_range())) {
-      // The current token to process does not come before the next
-      // macro invocation. However, the macro invocation might still
-      // be unrelated to any pp_token, namely if it's part of some
-      // preprocessor directive.
-      if (!(it_mi->get_source_range() < it_tok->get_token_source())) {
-	add_ums(it_mi->get_used_macros());
-	add_mncs(it_mi->get_macro_nondef_constraints(),
-		 it_mi->get_source_range().begin);
-	// Advance the current token iterator past the tokens from the
-	// macro_invocation just processed.
-	while (it_tok != tok_end &&
-	       !(it_mi->get_source_range() < it_tok->get_token_source())) {
-	  ++it_tok;
+  auto tok_index = header_range.begin;
+  const auto &toks = pp_result.get_pp_tokens();
+  while (tok_index != header_range.end) {
+    if (it_mi != mis.second) {
+      const auto mi_output_range = it_mi->get_output_range(pp_result);
+      if (tok_index >= mi_output_range.begin) {
+	// The current token to process does not come before the next
+	// macro invocation. However, the macro invocation might still
+	// be unrelated to any pp_token, namely if it's part of some
+	// preprocessor directive.
+	if (tok_index < mi_output_range.end) {
+	  add_ums(it_mi->get_used_macros());
+	  add_mncs(it_mi->get_macro_nondef_constraints(),
+		   it_mi->get_source_range().begin);
+	  // Advance the current token iterator past the tokens from the
+	  // macro_invocation just processed.
+	  tok_index = std::min(header_range.end, mi_output_range.end);
 	}
+	++it_mi;
+	continue;
       }
-      ++it_mi;
+    }
 
-    } else if (it_tok->is_id()) {
+    if (toks[tok_index].is_id()) {
       // Look ahead to check whether the identifier token is not
       // followed by an opening parenthesis and thus, a function style
       // definition, even if present, would not alter the result. If
       // the next token is a parenthesis, but it itself or any
       // whitespace before it is the result of some macro invocation,
       // then it can be safely ignored.
-      auto it_next_tok = it_tok + 1;
-      while (it_next_tok != tok_end &&
-	     it_next_tok->is_type_any_of<pp_token::type::ws,
-					 pp_token::type::empty,
-					 pp_token::type::newline>()) {
-	++it_next_tok;
+      auto next_tok_index = tok_index + 1;
+      while (next_tok_index != header_range.end &&
+	     toks[next_tok_index].is_type_any_of<pp_token::type::ws,
+						 pp_token::type::empty,
+						 pp_token::type::newline>()) {
+	++next_tok_index;
       }
 
       bool func_like_allowed = false;
-      if (it_next_tok == tok_end ||
-	  !it_next_tok->is_punctuator("(") ||
+      if (next_tok_index == header_range.end ||
+	  !toks[next_tok_index].is_punctuator("(") ||
 	  (it_mi != mis.second &&
-	   !(it_next_tok->get_token_source() < it_mi->get_source_range()))) {
+	   next_tok_index >= it_mi->get_output_range(pp_result).begin)) {
 	func_like_allowed = true;
       }
 
-      add_mnc(pp_result::macro_nondef_constraint{it_tok->get_value(),
+      add_mnc(pp_result::macro_nondef_constraint{toks[tok_index].get_value(),
 						 func_like_allowed},
-	      it_tok->get_token_source().begin);
-      ++it_tok;
+	      pp_result.pp_token_index_to_raw(tok_index).begin);
+      ++tok_index;
 
     } else {
-      ++it_tok;
+      ++tok_index;
 
     }
   }
@@ -3000,10 +3014,9 @@ void depreprocessor::_try_merge_chunks_pre()
     const auto mis =
       _pp_result.find_overlapping_macro_invocations(seq_range_raw);
     for (auto it_mi = mis.first; it_mi != mis.second; ++it_mi) {
-      const raw_pp_tokens_range mi_range_raw = it_mi->get_source_range();
-      const pp_tokens_range mi_range =
-	_pp_result.raw_pp_tokens_range_to_nonraw(mi_range_raw);
-      if (!mi_range.is_contained_in(seq_range))
+      const pp_tokens_range mi_output_range =
+	it_mi->get_output_range(_pp_result);
+      if (!mi_output_range.is_contained_in(seq_range))
 	continue;
 
       for (auto it = seq_begin + 1; it != seq_end; ++it) {
@@ -3015,7 +3028,7 @@ void depreprocessor::_try_merge_chunks_pre()
 		tic._ops.front().r.begin,
 	};
 
-	if (gap_range.is_contained_in(mi_range)) {
+	if (gap_range.is_contained_in(mi_output_range)) {
 	  // Merge the chunks.
 	  tic_prev._ops.back().r.end = tic._ops.front().r.end;
 	  tic_prev._ops.insert(tic_prev._ops.end(),
