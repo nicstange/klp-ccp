@@ -2028,7 +2028,7 @@ _write(source_writer &writer, _output_state &state,
 depreprocessor::transformed_input_chunk::_op::
 _op(const pp_tokens_range &copied_range)
   : a(action::copy), r(copied_range), stickiness(sticky_side::none),
-    new_tok{pp_token::type::eof, std::string{}, raw_pp_tokens_range{}},
+    new_tok{pp_token::type::eof, std::string{}},
     add_pointer_deref(false), cond_incl_node(nullptr),
     rewritten_macro_invocation(nullptr)
 {
@@ -2058,7 +2058,7 @@ depreprocessor::transformed_input_chunk::_op::_op(const pp_token_index pos,
 depreprocessor::transformed_input_chunk::_op::_op(const pp_token_index pos,
 						  const sticky_side _stickiness)
   : a(action::insert_ws), r(pp_tokens_range{pos, pos}), stickiness(_stickiness),
-    new_tok{pp_token::type::eof, std::string{}, raw_pp_tokens_range{}},
+    new_tok{pp_token::type::eof, std::string{}},
     add_pointer_deref(false), cond_incl_node(nullptr),
     rewritten_macro_invocation(nullptr)
 {}
@@ -2068,7 +2068,7 @@ _op(const pp_result::conditional_inclusion_node &_c,
     const _cond_incl_transition_kind k,
     const raw_pp_tokens_range &op_range_raw)
   : a(action::cond_incl_transition), r(), stickiness(sticky_side::none),
-    new_tok{pp_token::type::eof, std::string{}, raw_pp_tokens_range{}},
+    new_tok{pp_token::type::eof, std::string{}},
     add_pointer_deref(false), cond_incl_node(&_c), cond_incl_trans_kind(k),
     cond_incl_op_range_raw(op_range_raw),
     rewritten_macro_invocation(nullptr)
@@ -2080,7 +2080,7 @@ _op(const pp_tokens_range &expanded_macro_range,
     replaced_macro_arg_toks_type &&_replaced_macro_arg_toks)
   : a(action::rewrite_macro_invocation), r(expanded_macro_range),
     stickiness(sticky_side::none),
-    new_tok{pp_token::type::eof, std::string{}, raw_pp_tokens_range{}},
+    new_tok{pp_token::type::eof, std::string{}},
     add_pointer_deref(false), cond_incl_node(nullptr),
     rewritten_macro_invocation(_rewritten_macro_invocation),
     replaced_macro_arg_toks(std::move(_replaced_macro_arg_toks))
