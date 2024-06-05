@@ -104,7 +104,8 @@ namespace klp
 	peek,
       };
 
-      _pp_token _read_next_plain_token(const _read_ctl ctl);
+      const std::pair<raw_pp_token_index, bool>
+      _read_next_plain_token(const _read_ctl ctl);
 
       void _handle_eof_from_tokenizer(const raw_pp_token &eof_tok);
 
@@ -129,9 +130,12 @@ namespace klp
       void _handle_pp_directive(const _read_ctl ctl);
 
       std::pair<bool, std::vector<_pp_token>>
-      _try_expand(const raw_pp_token_index id_tok_index,
-		  const std::function<_pp_token(const _read_ctl)> &tok_reader,
-		  const bool from_cond_incl_cond);
+      _try_expand_raw
+	(const raw_pp_token_index id_tok_index,
+	 const
+	   std::function<std::pair<raw_pp_token_index, bool>(const _read_ctl)>
+	   &raw_token_reader,
+	 const bool from_cond_incl_cond);
 
       _scanned_macro_invocation
       _read_func_macro_invocation

@@ -480,14 +480,13 @@ pp_token_index preprocessor::_emit_pp_token(pp_result &r, _pp_token &&tok)
   return tok_index;
 }
 
-preprocessor::_pp_token preprocessor::
+const std::pair<raw_pp_token_index, bool> preprocessor::
 _read_next_plain_token(const _read_ctl ctl)
 {
  again:
   // Has the final eof token been seen?
   if (_eof) {
-    return _pp_token{pp_token::type::eof, std::string{""},
-		     raw_pp_tokens_range{_eof_index, _eof_index}};
+    return std::make_pair(_eof_index, true);
   }
 
   if (_tokenizers.empty()) {
@@ -517,7 +516,7 @@ _read_next_plain_token(const _read_ctl ctl)
     _peeked_begin = _none_peeked;
   }
 
-  auto raw_tok = [&]() -> const raw_pp_token * {
+  auto next_tok = [&]() -> const std::pair<raw_pp_token_index, bool> {
     if (_peeked_begin == _none_peeked || ctl == _read_ctl::peek) {
       try {
 	auto tok = _tokenizers.top().read_next_token();
@@ -528,11 +527,11 @@ _read_next_plain_token(const _read_ctl ctl)
 	  if (ctl != _read_ctl::peek)
 	    _handle_eof_from_tokenizer(tok);
 
-	  return nullptr;
+	  return std::make_pair(_pp_result->get_raw_tokens().size(), true);
 	}
 
 	_pp_result->_append_token(std::move(tok));
-	return &_pp_result->get_raw_tokens().back();
+	return std::make_pair(_pp_result->get_raw_tokens().size() - 1, false);
 
       } catch (const pp_except&) {
 	_grab_remarks_from(_tokenizers.top());
@@ -540,47 +539,43 @@ _read_next_plain_token(const _read_ctl ctl)
       }
 
     } else {
-      const raw_pp_token *peeked_tok =
-	&_pp_result->get_raw_tokens()[_peeked_begin];
+      const raw_pp_token_index peeked_tok = _peeked_begin;
       if (++_peeked_begin == _pp_result->get_raw_tokens().size())
 	_peeked_begin = _none_peeked;
       _maybe_pp_directive = _peeked_maybe_pp_directive;
-      return peeked_tok;
+      return std::make_pair(peeked_tok, false);
 
     }
   }();
 
-  if (!raw_tok) {
+  if (next_tok.second) {
+    // It's an EOF.
     _maybe_pp_directive = true;
 
-    if (!_eof && ctl != _read_ctl::normal) {
-      const raw_pp_token_index eof_index
-	= _pp_result->_get_last_raw_index() + 1;
-      return _pp_token{pp_token::type::eof, std::string{""},
-		       raw_pp_tokens_range{eof_index, eof_index}};
-    }
+    if (!_eof && ctl != _read_ctl::normal)
+      return next_tok;
 
     goto again;
   }
 
+  const raw_pp_token_index raw_tok_index = next_tok.first;
+  const auto &raw_tok = _pp_result->get_raw_tokens()[raw_tok_index];
+
   const bool is_pp_directive =
-    _maybe_pp_directive && raw_tok->is_punctuator("#");
-  if (raw_tok->is_newline()) {
+    _maybe_pp_directive && raw_tok.is_punctuator("#");
+  if (raw_tok.is_newline()) {
     _maybe_pp_directive = true;
 
   } else if (is_pp_directive) {
     // In peek mode, crossing preprocessor directives is not allowed.
     if (ctl == _read_ctl::peek) {
-      const raw_pp_token_index eof_index
-	= _pp_result->_get_last_raw_index();
-      return _pp_token{pp_token::type::eof, std::string{""},
-		       raw_pp_tokens_range{eof_index, eof_index}};
+      return std::make_pair(raw_tok_index, true);
     }
 
     _handle_pp_directive(ctl);
     goto again;
 
-  } else if (!raw_tok->is_ws()) {
+  } else if (!raw_tok.is_ws()) {
     _maybe_pp_directive = false;
 
   }
@@ -595,11 +590,7 @@ _read_next_plain_token(const _read_ctl ctl)
   if (_cond_incl_inactive())
     goto again;
 
-  const raw_pp_token_index raw_token_index =
-    raw_tok - &_pp_result->get_raw_tokens()[0];
-  return _pp_token{raw_tok->get_type(), raw_tok->get_value(),
-		   raw_pp_tokens_range{raw_token_index},
-		   raw_token_index};
+  return std::make_pair(raw_tok_index, false);
 }
 
 void preprocessor::_handle_eof_from_tokenizer(const raw_pp_token &eof_tok)
@@ -1040,38 +1031,55 @@ pp_token_index preprocessor::read_next_token()
     return _emit_pp_token(*_pp_result, std::move(tok));
   }
 
-  auto raw_tok = _read_next_plain_token(_read_ctl::normal);
-  const auto raw_tok_index = raw_tok.get_token_source().begin;
-  if (raw_tok.is_id()) {
-    auto &&expansion_result =
-      _try_expand(raw_tok_index,
-		  std::bind(&preprocessor::_read_next_plain_token,
-			    this, std::placeholders::_1),
-		  false);
+  const auto raw_tok = _read_next_plain_token(_read_ctl::normal);
+  if (!raw_tok.second) {
+    const auto &raw_toks = _pp_result->get_raw_tokens();
+    if (raw_toks[raw_tok.first].is_id()) {
+      auto &&expansion_result =
+	_try_expand_raw(raw_tok.first,
+			std::bind(&preprocessor::_read_next_plain_token,
+				  this, std::placeholders::_1),
+			false);
 
-    if (expansion_result.first) {
-      _pp_result->_pp_tokens_origins.append
-	(_pp_result->_macro_invocations.size() - 1,
-	 _pp_result->_macro_invocations,
-	 pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
-      for (auto &&t : expansion_result.second)
-	_expanded_tokens.emplace(std::move(t));
-      goto from_expansion;
+      if (expansion_result.first) {
+	_pp_result->_pp_tokens_origins.append
+	  (_pp_result->_macro_invocations.size() - 1,
+	   _pp_result->_macro_invocations,
+	   pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
+	for (auto &&t : expansion_result.second)
+	  _expanded_tokens.emplace(std::move(t));
+	goto from_expansion;
+      }
     }
+
+    _pp_result->_pp_tokens_origins.append
+      (raw_tok.first, _pp_result->_macro_invocations,
+       pp_result::_pp_tokens_origins::from_raw_tag{});
+
+    return _emit_pp_token(*_pp_result,
+			  _pp_token{
+			    raw_toks[raw_tok.first].get_type(),
+			    raw_toks[raw_tok.first].get_value(),
+			    raw_pp_tokens_range{raw_tok.first},
+			    raw_tok.first,
+			  });
+
+  } else {
+    return _emit_pp_token(*_pp_result,
+			  _pp_token{
+			    pp_token::type::eof,
+			    std::string{},
+			    raw_pp_tokens_range{raw_tok.first, raw_tok.first}
+			  });
   }
-
-  _pp_result->_pp_tokens_origins.append
-    (raw_tok_index, _pp_result->_macro_invocations,
-     pp_result::_pp_tokens_origins::from_raw_tag{});
-
-  return _emit_pp_token(*_pp_result, std::move(raw_tok));
 }
 
 std::pair<bool, std::vector<preprocessor::_pp_token>>
-preprocessor::_try_expand
-	(const raw_pp_token_index id_tok_index,
-	 const std::function<_pp_token(const _read_ctl)> &token_reader,
-	 const bool from_cond_incl_cond)
+preprocessor::_try_expand_raw
+  (const raw_pp_token_index id_tok_index,
+   const std::function<std::pair<raw_pp_token_index, bool>(const _read_ctl)>
+     &raw_token_reader,
+   const bool from_cond_incl_cond)
 {
   typedef std::vector<preprocessor::_pp_token> _pp_tokens_type;
 
@@ -1090,20 +1098,40 @@ preprocessor::_try_expand
 
   using expansion_forest_nodes = _macro_expansion_forest::_forest_nodes;
 
+  auto read_raw_tok = [&](const _read_ctl read_ctl) {
+    const auto next_raw_tok = raw_token_reader(read_ctl);
+    const raw_pp_token_index raw_tok_index = next_raw_tok.first;
+    if (next_raw_tok.second) {
+      return _pp_token{
+	       pp_token::type::eof,
+	       std::string{},
+	       raw_pp_tokens_range{raw_tok_index, raw_tok_index}
+	     };
+    }
+
+    const auto &raw_tok = raw_tokens[raw_tok_index];
+    return _pp_token{
+      raw_tok.get_type(),
+      raw_tok.get_value(),
+      raw_pp_tokens_range{raw_tok_index},
+      raw_tok_index,
+    };
+  };
+
   pp_result::macro_invocation *mi;
   std::vector<_macro_expansion_stack_entry> expansion_stack;
   if (m->is_func_like()) {
     if (m != &_m_defined_op) {
-      _pp_token next_tok = token_reader(_read_ctl::peek);
+      _pp_token next_tok = read_raw_tok(_read_ctl::peek);
       while (next_tok.is_ws() || next_tok.is_newline() || next_tok.is_empty())
-	next_tok = token_reader(_read_ctl::peek);
+	next_tok = read_raw_tok(_read_ctl::peek);
 
       if (!next_tok.is_punctuator("("))
 	return std::make_pair(false, _pp_tokens_type{});
     }
 
     _scanned_macro_invocation smi =
-      _read_func_macro_invocation(*m, id_tok_index, token_reader);
+      _read_func_macro_invocation(*m, id_tok_index, read_raw_tok);
 
     mi = &_pp_result->_add_macro_invocation(*m,
 					    raw_pp_tokens_range{
@@ -1223,7 +1251,7 @@ preprocessor::_try_expand
 	    while (peeking_token_index == it_read_stack_entry->n_out_tokens) {
 	      const auto it_next = it_read_stack_entry + 1;
 	      if (it_next == expansion_stack.rend()) {
-		return token_reader(ctl);
+		return read_raw_tok(ctl);
 	      } else if (it_next->next_arg != it_next->args.size()) {
 		// Don't cross over a macro argument expansion's root
 		// entry.
@@ -1247,7 +1275,7 @@ preprocessor::_try_expand
 		   it_read_stack_entry->n_out_tokens) {
 	      const auto it_next = it_read_stack_entry + 1;
 	      if (it_next == expansion_stack.rend()) {
-		return token_reader(ctl);
+		return read_raw_tok(ctl);
 	      } else if (it_next->next_arg != it_next->args.size()) {
 		// Don't cross over a macro argument expansion's root
 		// entry.
@@ -2352,114 +2380,116 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
 
 void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 {
-  const raw_pp_tokens::const_iterator raw_begin =
-    _pp_result->get_raw_tokens().begin() + directive_range.begin;
-  const raw_pp_tokens::const_iterator raw_end =
-    _pp_result->get_raw_tokens().begin() + directive_range.end;
-  auto it_raw_tok = raw_begin;
+  const auto &raw_toks = _pp_result->get_raw_tokens();
+  auto raw_tok_index = directive_range.begin;
 
-  assert(it_raw_tok->is_punctuator("#"));
-  ++it_raw_tok;
+  assert(raw_toks[raw_tok_index].is_punctuator("#"));
+  ++raw_tok_index;
 
-  if (it_raw_tok->is_ws())
-    ++it_raw_tok;
+  if (raw_toks[raw_tok_index].is_ws())
+    ++raw_tok_index;
 
-  assert(it_raw_tok->is_id());
-  assert(it_raw_tok->get_value() == "include");
-  ++it_raw_tok;
+  assert(raw_toks[raw_tok_index].is_id());
+  assert(raw_toks[raw_tok_index].get_value() == "include");
+  ++raw_tok_index;
 
-  if (it_raw_tok->is_ws())
-    ++it_raw_tok;
+  if (raw_toks[raw_tok_index].is_ws())
+    ++raw_tok_index;
 
-  assert(it_raw_tok != raw_end);
+  assert(raw_tok_index != directive_range.end);
 
-  auto &&raw_it_to_range_in_file =
-    [&](const raw_pp_tokens::const_iterator &it_raw) {
+  auto &&raw_tok_index_to_range_in_file =
+    [&](const raw_pp_token_index raw_tok_index) {
       // Shrink range to start location
-      return range_in_file{it_raw->get_range_in_file().begin};
+      return range_in_file{raw_toks[raw_tok_index].get_range_in_file().begin};
     };
   std::string unresolved;
   bool is_qstr;
   pp_result::used_macros um;
   pp_result::macro_nondef_constraints mnc;
-  if (it_raw_tok->is_type_any_of<pp_token::type::qstr,
-				 pp_token::type::hstr>()) {
-    unresolved = it_raw_tok->get_value();
-    is_qstr = it_raw_tok->get_type() == pp_token::type::qstr;
-    ++it_raw_tok;
-    if (it_raw_tok->is_ws())
-      ++it_raw_tok;
+  if (raw_toks[raw_tok_index].is_type_any_of<pp_token::type::qstr,
+					     pp_token::type::hstr>()) {
+    unresolved = raw_toks[raw_tok_index].get_value();
+    is_qstr = raw_toks[raw_tok_index].get_type() == pp_token::type::qstr;
+    ++raw_tok_index;
+    if (raw_toks[raw_tok_index].is_ws())
+      ++raw_tok_index;
 
-    if (!it_raw_tok->is_newline() && !it_raw_tok->is_eof()) {
+    if (!raw_toks[raw_tok_index].is_newline() &&
+	!raw_toks[raw_tok_index].is_eof()) {
       code_remark remark(code_remark::severity::fatal,
 			 "garbage after #include",
-			 _raw_tok_it_to_source(it_raw_tok),
-			 raw_it_to_range_in_file(it_raw_tok));
+			 get_pending_token_source(raw_tok_index),
+			 raw_tok_index_to_range_in_file(raw_tok_index));
       _remarks.add(remark);
       throw pp_except(remark);
     }
   } else {
     // Run a macro expansion. Temporarily append the expanded pp_token
     // instances to _pp_result and drop them afterwards again.
-    auto it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
+    auto peeked_raw_tok_index = raw_toks.size();
     auto read_tok = [&](const _read_ctl ctl) {
-      if (it_peeked_raw_tok != _pp_result->get_raw_tokens().cend() &&
-	  ctl != _read_ctl::peek) {
-	const raw_pp_token_index tok_index =
-	  it_peeked_raw_tok- _pp_result->get_raw_tokens().cbegin();
-	_pp_token tok{it_peeked_raw_tok->get_type(),
-		      it_peeked_raw_tok->get_value(),
-		      raw_pp_tokens_range{tok_index}};
+      if (peeked_raw_tok_index != raw_toks.size() && ctl != _read_ctl::peek) {
+	const raw_pp_token_index next_raw_tok_index = peeked_raw_tok_index;
+	if (++peeked_raw_tok_index == raw_tok_index)
+	  peeked_raw_tok_index = raw_toks.size();
 
-	if (++it_peeked_raw_tok == it_raw_tok)
-	  it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
-
-	return tok;
+	return std::make_pair(next_raw_tok_index, false);
       }
 
-      const raw_pp_token_index tok_index =
-	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
-      if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
-	return _pp_token(pp_token::type::eof, std::string(),
-			 raw_pp_tokens_range{tok_index, tok_index});
+      if (raw_toks[raw_tok_index].is_newline() ||
+	  raw_toks[raw_tok_index].is_eof()) {
+	return std::make_pair(raw_tok_index, true);
       }
 
-      if (ctl == _read_ctl::peek &&
-	  it_peeked_raw_tok == _pp_result->get_raw_tokens().cend())
-	it_peeked_raw_tok = it_raw_tok;
+      if (ctl == _read_ctl::peek && peeked_raw_tok_index == raw_toks.size())
+	peeked_raw_tok_index = raw_tok_index;
 
-      _pp_token tok{it_raw_tok->get_type(), it_raw_tok->get_value(),
-		    raw_pp_tokens_range{tok_index}};
-      ++it_raw_tok;
-      return tok;
+      const raw_pp_token_index next_tok_index = raw_tok_index;
+      ++raw_tok_index;
+      return std::make_pair(next_tok_index, false);
     };
 
     const pp_tokens::size_type temp_tokens_tail_begin
       = _pp_result->get_pp_tokens().size();
     while (true) {
-      auto &&raw_tok = read_tok(_read_ctl::normal);
-      const auto raw_tok_index = raw_tok.get_token_source().begin;
-      if (raw_tok.is_id()) {
-	auto &&expansion_result = _try_expand(raw_tok.get_token_source().begin,
-					      read_tok, false);
-	if (expansion_result.first) {
-	  _pp_result->_pp_tokens_origins.append
-	    (_pp_result->_macro_invocations.size() - 1,
-	     _pp_result->_macro_invocations,
-	     pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
-	  for (auto &&t : expansion_result.second)
-	    _emit_pp_token(*_pp_result, std::move(t));
-	  continue;
+      const auto raw_tok = read_tok(_read_ctl::normal);
+      if (!raw_tok.second) {
+	if (raw_toks[raw_tok.first].is_id()) {
+	  auto &&expansion_result =
+	    _try_expand_raw(raw_tok.first, read_tok, false);
+	  if (expansion_result.first) {
+	    _pp_result->_pp_tokens_origins.append
+	      (_pp_result->_macro_invocations.size() - 1,
+	       _pp_result->_macro_invocations,
+	       pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
+	    for (auto &&t : expansion_result.second)
+	      _emit_pp_token(*_pp_result, std::move(t));
+	    continue;
+	  }
 	}
-      }
 
-      _pp_result->_pp_tokens_origins.append
-	(raw_tok_index, _pp_result->_macro_invocations,
-	 pp_result::_pp_tokens_origins::from_raw_tag{});
-      _emit_pp_token(*_pp_result, std::move(raw_tok));
+	_pp_result->_pp_tokens_origins.append
+	  (raw_tok.first, _pp_result->_macro_invocations,
+	   pp_result::_pp_tokens_origins::from_raw_tag{});
 
-      if (raw_tok.is_eof())
+	_emit_pp_token(*_pp_result,
+		       _pp_token{
+			 raw_toks[raw_tok.first].get_type(),
+			 raw_toks[raw_tok.first].get_value(),
+			 raw_pp_tokens_range{raw_tok.first},
+			 raw_tok.first
+		       });
+
+      } else {
+	_emit_pp_token(*_pp_result,
+		       _pp_token{
+			 pp_token::type::eof,
+			   std::string{},
+			   raw_pp_tokens_range{raw_tok.first, raw_tok.first}
+		       });
 	break;
+      }
     }
 
     auto skip = [&] (pp_tokens::const_iterator it) {
@@ -2477,8 +2507,8 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
     if (it_tok->is_eof()) {
       code_remark remark(code_remark::severity::fatal,
 			 "macro expansion at #include evaluated to nothing",
-			 _raw_tok_it_to_source(raw_begin),
-			 raw_it_to_range_in_file(raw_begin));
+			 get_pending_token_source(directive_range.begin),
+			 raw_tok_index_to_range_in_file(directive_range.begin));
       _remarks.add(remark);
       throw pp_except(remark);
     }
@@ -2497,15 +2527,16 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 	code_remark remark
 	  (code_remark::severity::fatal,
 	   "macro expansion at #include does not end with '>'",
-	   _raw_tok_it_to_source(raw_begin),
-	   raw_it_to_range_in_file(raw_begin));
+	   get_pending_token_source(directive_range.begin),
+	   raw_tok_index_to_range_in_file(directive_range.begin));
 	_remarks.add(remark);
 	throw pp_except(remark);
       } else if (unresolved.empty()) {
-	code_remark remark(code_remark::severity::fatal,
-			       "macro expansion at #include gives \"<>\"",
-			       _raw_tok_it_to_source(raw_begin),
-			       raw_it_to_range_in_file(raw_begin));
+	code_remark remark
+	  (code_remark::severity::fatal,
+	   "macro expansion at #include gives \"<>\"",
+	   get_pending_token_source(directive_range.begin),
+	   raw_tok_index_to_range_in_file(directive_range.begin));
 	_remarks.add(remark);
 	throw pp_except(remark);
       }
@@ -2518,16 +2549,16 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 	code_remark remark
 	  (code_remark::severity::fatal,
 	   "macro expansion at #include yields garbage at end",
-	   _raw_tok_it_to_source(raw_begin),
-	   raw_it_to_range_in_file(raw_begin));
+	   get_pending_token_source(directive_range.begin),
+	   raw_tok_index_to_range_in_file(directive_range.begin));
 	_remarks.add(remark);
 	throw pp_except(remark);
       }
     } else {
       code_remark remark(code_remark::severity::fatal,
 			 "macro expansion at #include doesn't conform",
-			 _raw_tok_it_to_source(raw_begin),
-			 raw_it_to_range_in_file(raw_begin));
+			 get_pending_token_source(directive_range.begin),
+			 raw_tok_index_to_range_in_file(directive_range.begin));
       _remarks.add(remark);
       throw pp_except(remark);
     }
@@ -2546,8 +2577,8 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
   if (resolved.empty()) {
     code_remark remark(code_remark::severity::fatal,
 		       "could not find header from #include",
-		       _raw_tok_it_to_source(raw_begin),
-		       raw_it_to_range_in_file(raw_begin));
+		       get_pending_token_source(directive_range.begin),
+		       raw_tok_index_to_range_in_file(directive_range.begin));
     _remarks.add(remark);
     throw pp_except(remark);
   }
@@ -2607,80 +2638,83 @@ bool preprocessor::_cond_incl_inactive() const noexcept
 bool preprocessor::
 _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
 {
-  const raw_pp_tokens::const_iterator raw_begin =
-    _pp_result->get_raw_tokens().begin() + directive_range.begin;
-  auto it_raw_tok = raw_begin + 1;
-  if (it_raw_tok->is_ws())
-    ++it_raw_tok;
-  assert(it_raw_tok->get_type() == pp_token::type::id &&
-	 (it_raw_tok->get_value() == "if" ||
-	  it_raw_tok->get_value() == "elif"));
-  ++it_raw_tok;
+  const auto &raw_toks = _pp_result->get_raw_tokens();
+  auto raw_tok_index = directive_range.begin + 1;
+  if (raw_toks[raw_tok_index].is_ws())
+    ++raw_tok_index;
+  assert(raw_toks[raw_tok_index].get_type() == pp_token::type::id &&
+	 (raw_toks[raw_tok_index].get_value() == "if" ||
+	  raw_toks[raw_tok_index].get_value() == "elif"));
+  ++raw_tok_index;
 
   // Temporarily append the expanded pp_token instances from the
   // condition to _pp_result. They'll get purged again when we're done
   // with them.
   _fixup_inclusion_node_ranges();
-  auto it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
+  auto peeked_raw_tok_index = raw_toks.size();
   auto read_tok =
     [&](const _read_ctl ctl) {
-      if (it_peeked_raw_tok != _pp_result->get_raw_tokens().cend() &&
-	  ctl != _read_ctl::peek) {
-	const raw_pp_token_index tok_index =
-	  it_peeked_raw_tok- _pp_result->get_raw_tokens().cbegin();
-	_pp_token tok{it_peeked_raw_tok->get_type(),
-		      it_peeked_raw_tok->get_value(),
-		      raw_pp_tokens_range{tok_index}};
+      if (peeked_raw_tok_index != raw_toks.size() && ctl != _read_ctl::peek) {
+	const raw_pp_token_index next_raw_tok_index = peeked_raw_tok_index;
+	if (++peeked_raw_tok_index == raw_tok_index)
+	  peeked_raw_tok_index = raw_toks.size();
 
-	if (++it_peeked_raw_tok == it_raw_tok)
-	  it_peeked_raw_tok = _pp_result->get_raw_tokens().cend();
-
-	return tok;
+	return std::make_pair(next_raw_tok_index, false);
       }
 
-      const raw_pp_token_index tok_index =
-	it_raw_tok - _pp_result->get_raw_tokens().cbegin();
-      if (it_raw_tok->is_newline() || it_raw_tok->is_eof()) {
-	return _pp_token(pp_token::type::eof, std::string(),
-			 raw_pp_tokens_range{tok_index, tok_index});
+      if (raw_toks[raw_tok_index].is_newline() ||
+	  raw_toks[raw_tok_index].is_eof()) {
+	return std::make_pair(raw_tok_index, true);
       }
 
-      if (ctl == _read_ctl::peek &&
-	  it_peeked_raw_tok == _pp_result->get_raw_tokens().cend())
-	it_peeked_raw_tok = it_raw_tok;
+      if (ctl == _read_ctl::peek && peeked_raw_tok_index == raw_toks.size())
+	peeked_raw_tok_index = raw_tok_index;
 
-      _pp_token tok{it_raw_tok->get_type(), it_raw_tok->get_value(),
-		    raw_pp_tokens_range{tok_index}};
-      ++it_raw_tok;
-      return tok;
+      const raw_pp_token_index next_tok_index = raw_tok_index;
+      ++raw_tok_index;
+      return std::make_pair(next_tok_index, false);
     };
 
   const pp_tokens::size_type temp_tokens_tail_begin
     = _pp_result->get_pp_tokens().size();
   while (true) {
-    auto &&raw_tok = read_tok(_read_ctl::normal);
-    const auto raw_tok_index = raw_tok.get_token_source().begin;
-    if (raw_tok.is_id()) {
-      auto &&expansion_result = _try_expand(raw_tok.get_token_source().begin,
-					    read_tok, true);
-      if (expansion_result.first) {
+      const auto raw_tok = read_tok(_read_ctl::normal);
+      if (!raw_tok.second) {
+	if (raw_toks[raw_tok.first].is_id()) {
+	  auto &&expansion_result =
+	    _try_expand_raw(raw_tok.first, read_tok, true);
+	  if (expansion_result.first) {
+	    _pp_result->_pp_tokens_origins.append
+	      (_pp_result->_macro_invocations.size() - 1,
+	       _pp_result->_macro_invocations,
+	       pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
+	    for (auto &&t : expansion_result.second)
+	      _emit_pp_token(*_pp_result, std::move(t));
+	    continue;
+	  }
+	}
+
 	_pp_result->_pp_tokens_origins.append
-	  (_pp_result->_macro_invocations.size() - 1,
-	   _pp_result->_macro_invocations,
-	   pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
-	for (auto &&t : expansion_result.second)
-	  _emit_pp_token(*_pp_result, std::move(t));
-	continue;
+	  (raw_tok.first, _pp_result->_macro_invocations,
+	   pp_result::_pp_tokens_origins::from_raw_tag{});
+
+	_emit_pp_token(*_pp_result,
+		       _pp_token{
+			 raw_toks[raw_tok.first].get_type(),
+			 raw_toks[raw_tok.first].get_value(),
+			 raw_pp_tokens_range{raw_tok.first},
+			 raw_tok.first
+		       });
+
+      } else {
+	_emit_pp_token(*_pp_result,
+		       _pp_token{
+			 pp_token::type::eof,
+			   std::string{},
+			   raw_pp_tokens_range{raw_tok.first, raw_tok.first}
+		       });
+	break;
       }
-    }
-
-    _pp_result->_pp_tokens_origins.append
-      (raw_tok_index, _pp_result->_macro_invocations,
-       pp_result::_pp_tokens_origins::from_raw_tag{});
-    _emit_pp_token(*_pp_result, std::move(raw_tok));
-
-    if (raw_tok.is_eof())
-      break;
   }
 
   pp_tokens::size_type read_token_index = temp_tokens_tail_begin;
