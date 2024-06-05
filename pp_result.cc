@@ -21,6 +21,8 @@
 #include "raw_pp_token.hh"
 #include "source_reader.hh"
 #include <limits>
+#include <algorithm>
+#include <iterator>
 
 using namespace klp::ccp;
 
@@ -353,6 +355,18 @@ macro_invocation(const macro &m,
     _expansion_forest(m, invocation_range.begin, src_length)
 {
   _used_macros += m;
+}
+
+const pp_tokens_range pp_result::macro_invocation::
+get_output_range(const pp_result &pp_result) const noexcept
+{
+  // This reverse lookup method works also for macro invocations not
+  // represented in the final preprocessing output, because
+  // e.g. they're invoked from some preprocessor directive. In this
+  // case a "collapsed" point within the pp_tokens sequence resembling
+  // their relative position within the raw_pp_tokens is getting
+  // returned.
+  return pp_result.raw_pp_tokens_range_to_nonraw(get_source_range());
 }
 
 const pp_result::macro_invocation::passed_through_arg_token*
@@ -1846,6 +1860,58 @@ raw_pp_tokens_range_to_nonraw
   return pp_tokens_range{begin, end};
 }
 
+std::pair<std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>,
+	  std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>>
+pp_result::_pp_tokens_origins::find_overlapping_macro_invocations
+(const pp_tokens_range &range,
+ const _macro_invocations_container_type &macro_invocations,
+ const pp_tokens::size_type pp_tokens_end)
+  const noexcept
+{
+  auto r = _lookup(range, macro_invocations);
+  if (r.second.second != 0) {
+    r.second.first += 1;
+  }
+
+  const auto it_first_mi = std::find_if
+    (_pp_tokens_seqs_origins.cbegin() + r.first.first,
+     _pp_tokens_seqs_origins.cbegin() + r.second.first,
+     [](const _pp_tokens_seq_origin  &e) {
+       return e._kind == _pp_tokens_seq_origin::_kind::from_macro_expansion;
+     });
+  if (it_first_mi == _pp_tokens_seqs_origins.cbegin() + r.second.first) {
+    return
+      std::make_pair
+      (std::make_pair(const_macro_invocation_iterator{macro_invocations.cend()},
+		      pp_tokens_end),
+       std::make_pair(const_macro_invocation_iterator{macro_invocations.cend()},
+		      pp_tokens_end));
+  }
+
+  const auto it_last_mi = std::find_if
+    (std::make_reverse_iterator(_pp_tokens_seqs_origins.cbegin() +
+				r.second.first),
+     std::make_reverse_iterator(it_first_mi + 1),
+     [](const _pp_tokens_seq_origin  &e) {
+       return e._kind == _pp_tokens_seq_origin::_kind::from_macro_expansion;
+     });
+
+  return
+    std::make_pair
+    (std::make_pair(const_macro_invocation_iterator{
+		      macro_invocations.cbegin() +
+		       it_first_mi->_source.macro_expansion.mi_index
+		    },
+		    it_first_mi->_out_begin),
+     std::make_pair(const_macro_invocation_iterator{
+		      macro_invocations.cbegin() +
+		       it_last_mi->_source.macro_expansion.mi_index + 1
+		    },
+		    it_last_mi->out_end(macro_invocations)));
+}
+
+
+
 pp_token_index pp_result::_pp_tokens_origins::_total_out_end
 (const _macro_invocations_container_type &macro_invocations)
   const noexcept
@@ -2915,6 +2981,17 @@ pp_result::find_overlapping_macro_invocations(const raw_pp_tokens_range &r)
 {
   return std::equal_range(macro_invocations_begin(), macro_invocations_end(),
 			  r);
+}
+
+std::pair<std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>,
+	  std::pair<pp_result::const_macro_invocation_iterator, pp_token_index>>
+pp_result::find_overlapping_macro_invocations(const pp_tokens_range &r)
+  const noexcept
+{
+  return
+    _pp_tokens_origins.find_overlapping_macro_invocations(r,
+							  _macro_invocations,
+							  _pp_tokens.size());
 }
 
 pp_result::const_intersecting_source_iterator

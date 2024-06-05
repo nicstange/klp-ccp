@@ -1295,6 +1295,9 @@ namespace klp
 	const raw_pp_tokens_range& get_source_range() const noexcept
 	{ return _invocation_range; }
 
+	const pp_tokens_range get_output_range(const pp_result &pp_result)
+	  const noexcept;
+
 	bool operator<(const raw_pp_tokens_range &r) const noexcept
 	{ return _invocation_range < r; }
 
@@ -1427,6 +1430,11 @@ namespace klp
       find_overlapping_macro_invocations(const raw_pp_tokens_range &r)
 	const noexcept;
 
+      std::pair<std::pair<const_macro_invocation_iterator, pp_token_index>,
+		std::pair<const_macro_invocation_iterator, pp_token_index>>
+      find_overlapping_macro_invocations(const pp_tokens_range &r)
+	const noexcept;
+
     private:
       class _pp_tokens_origins {
       private:
@@ -1471,6 +1479,14 @@ namespace klp
 	pp_tokens_range
 	raw_pp_tokens_range_to_nonraw
 	  (const raw_pp_tokens_range &raw_range,
+	   const _macro_invocations_container_type &macro_invocations,
+	   const pp_tokens::size_type pp_tokens_end)
+	  const noexcept;
+
+	std::pair<std::pair<const_macro_invocation_iterator, pp_token_index>,
+		  std::pair<const_macro_invocation_iterator, pp_token_index>>
+	find_overlapping_macro_invocations
+	  (const pp_tokens_range &range,
 	   const _macro_invocations_container_type &macro_invocations,
 	   const pp_tokens::size_type pp_tokens_end)
 	  const noexcept;
