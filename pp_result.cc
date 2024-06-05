@@ -3208,9 +3208,7 @@ pp_result::_drop_pp_tokens_tail(const pp_tokens::size_type new_end)
 
   assert(new_end <= _pp_tokens.size());
 
-  const auto tok_begin = _pp_tokens.begin() + new_end;
-  const auto tok_end = _pp_tokens.end();
-  if (tok_begin == tok_end)
+  if (new_end == _pp_tokens.size())
     return std::make_pair(std::move(um), std::move(mnc));
 
   // Each pp_token is either the result of a macro_invocation or not.
@@ -3218,54 +3216,61 @@ pp_result::_drop_pp_tokens_tail(const pp_tokens::size_type new_end)
   // found at this macro_invocation. Otherwise, the
   // macro_nondef_constraints for identifier tokens can be derived
   // from the pp_token_value itself.
-  const auto mis_range
-    = (this->find_overlapping_macro_invocations
-       (raw_pp_tokens_range{tok_begin->get_token_source().begin,
-			    (tok_end - 1)->get_token_source().end}));
+  const auto mis_range = [&]() {
+    const auto mis_range
+      = (this->find_overlapping_macro_invocations
+	 (pp_tokens_range{new_end, _pp_tokens.size()}));
+    return std::make_pair(mis_range.first.first, mis_range.second.first);
+  }();
   auto it_mi = mis_range.first;
-  auto it_tok = tok_begin;
-  while (it_tok != tok_end) {
-    if (it_mi != mis_range.second &&
-	!(it_tok->get_token_source() < it_mi->get_source_range())) {
-      um += it_mi->get_used_macros();
-      mnc += it_mi->get_macro_nondef_constraints();
+  auto tok_index = new_end;
+  while (tok_index != _pp_tokens.size()) {
+    if (it_mi != mis_range.second) {
+      const auto mi_output_range = it_mi->get_output_range(*this);
+      if (tok_index >= mi_output_range.begin) {
+	um += it_mi->get_used_macros();
+	mnc += it_mi->get_macro_nondef_constraints();
 
-      // Advance the current token iterator past the tokens from the
-      // macro_invocation just processed.
-      while (it_tok != tok_end &&
-	     !(it_mi->get_source_range() < it_tok->get_token_source())) {
-	++it_tok;
+	// Advance the current token iterator past the tokens from the
+	// macro_invocation just processed.
+	tok_index = std::min(_pp_tokens.size(), mi_output_range.end);
+	++it_mi;
+	continue;
       }
-      ++it_mi;
+    }
 
-    } else if (it_tok->is_id()) {
+    if (_pp_tokens[tok_index].is_id()) {
       // Look ahead to check whether the identifier token is not
       // followed by an opening parenthesis and thus, a function style
       // definition, even if present, would not alter the result. If
       // the next token is a parenthesis, but it itself or any
       // whitespace before it is the result of some macro invocation,
       // then it can be safely ignored.
-      auto it_next_tok = it_tok + 1;
-      while (it_next_tok != tok_end &&
-	     it_next_tok->is_type_any_of<pp_token::type::ws,
-					 pp_token::type::empty,
-					 pp_token::type::newline>()) {
-	++it_next_tok;
+      auto next_tok_index = tok_index + 1;
+      while (next_tok_index != _pp_tokens.size() &&
+	     (_pp_tokens[next_tok_index]
+	      .is_type_any_of<pp_token::type::ws,
+			      pp_token::type::empty,
+			      pp_token::type::newline>())) {
+	++next_tok_index;
       }
 
       bool func_like_allowed = false;
-      if (it_next_tok == tok_end ||
-	  !it_next_tok->is_punctuator("(") ||
+      if (next_tok_index == _pp_tokens.size() ||
+	  !_pp_tokens[next_tok_index].is_punctuator("(") ||
 	  (it_mi != mis_range.second &&
-	   !(it_next_tok->get_token_source() < it_mi->get_source_range()))) {
+	   next_tok_index >= it_mi->get_output_range(*this).begin)) {
 	func_like_allowed = true;
       }
 
-      mnc += macro_nondef_constraint{it_tok->get_value(), func_like_allowed};
-      ++it_tok;
+      mnc += macro_nondef_constraint{
+	       _pp_tokens[tok_index].get_value(),
+	       func_like_allowed
+	     };
+      ++tok_index;
 
     } else {
-      ++it_tok;
+      ++tok_index;
 
     }
   }
