@@ -742,6 +742,8 @@ namespace klp
 
 	    const _rescan_macro_invocation& deref() const noexcept;
 
+	    bool is_nil_node() const noexcept;
+
 	  private:
 	    std::reference_wrapper<const _forest_nodes> _forest;
 	    _forest_nodes::size_type _node;
@@ -764,6 +766,9 @@ namespace klp
 	    std::size_t _begin;
 	    std::size_t _length;
 	  }; // class rescan_output_segment
+
+
+	  using nodes_size_type = _forest_nodes::size_type;
 
 	  class rescan_macro_invocation
 	  {
@@ -1074,10 +1079,29 @@ namespace klp
 	      _fragments_container_type _fragments;
 	    }; // class output
 
+
+	    explicit operator rescan_subtree() const noexcept;
+
+	    explicit operator nodes_size_type() const noexcept;
+
+	    explicit operator rescan_output_segment() const noexcept;
+
 	    bool operator==(const rescan_macro_invocation &rhs) const noexcept;
 
+	    const bool is_nil_node() const noexcept;
+
+	    const bool is_rescan_tree_root() const noexcept;
+
+	    const rescan_macro_invocation get_rescan_parent() const noexcept;
+
+	    const bool is_arg_tree_root() const noexcept;
+
+	    const rescan_macro_invocation get_arg_tree_owner() const noexcept;
+
+	    const macro& get_macro() const noexcept;
+
 	  private:
-	    friend class rescan_subtree;
+	    friend class expansion_forest;
 
 	    rescan_macro_invocation(const _rescan_macro_invocation_ref &ref)
 	      noexcept;
@@ -1227,6 +1251,8 @@ namespace klp
 	      std::stack<std::size_t> _consumed_out_lengths_stack;
 	    }; // class const_final_out_iterator
 
+	    explicit operator rescan_macro_invocation() const noexcept;
+
 	    const_dfs_pre_iterator begin() const noexcept;
 	    const_dfs_pre_iterator end() const noexcept;
 
@@ -1248,6 +1274,9 @@ namespace klp
 	  expansion_forest(const macro &m,
 			   const std::size_t src_begin,
 			   const std::size_t src_length);
+
+	  const rescan_macro_invocation
+	  operator[](const nodes_size_type node_index) const noexcept;
 
 	  const rescan_subtree get_main_tree() const noexcept;
 

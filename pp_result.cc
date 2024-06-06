@@ -768,7 +768,14 @@ operator==(const _rescan_macro_invocation_ref &rhs)
 const expansion_forest::_rescan_macro_invocation&
 expansion_forest::_rescan_macro_invocation_ref::deref() const noexcept
 {
+  assert(!is_nil_node());
   return _forest.get()[_node];
+}
+
+bool expansion_forest::_rescan_macro_invocation_ref::
+is_nil_node() const noexcept
+{
+  return _node == _forest_nodes::size_type::invalid();
 }
 
 expansion_forest::expansion_forest(const macro &m,
@@ -776,6 +783,14 @@ expansion_forest::expansion_forest(const macro &m,
 				   const std::size_t src_length)
   : _forest(m, src_begin, src_length)
 {}
+
+const expansion_forest::rescan_macro_invocation expansion_forest::
+operator[](const nodes_size_type node_index) const noexcept
+{
+  return rescan_macro_invocation{
+    _rescan_macro_invocation_ref{_forest, node_index}
+  };
+}
 
 const expansion_forest::rescan_subtree expansion_forest::get_main_tree()
   const noexcept
@@ -923,11 +938,24 @@ rescan_macro_invocation(const _rescan_macro_invocation_ref &ref) noexcept
   : _ref(ref)
 {}
 
-bool expansion_forest::rescan_macro_invocation::
-operator==(const rescan_macro_invocation &rhs) const noexcept
+expansion_forest::rescan_macro_invocation::
+operator rescan_subtree() const noexcept
 {
-  return _ref == rhs._ref;
+  return rescan_subtree{_ref};
 }
+
+expansion_forest::rescan_macro_invocation::
+operator nodes_size_type() const noexcept
+{
+  return _ref.get_node();
+}
+
+expansion_forest::rescan_macro_invocation::
+operator rescan_output_segment() const noexcept
+{
+  return rescan_output_segment{_ref, 0, _ref.deref().out_length()};
+}
+
 
 expansion_forest::rescan_macro_invocation::const_src_iterator
 expansion_forest::rescan_macro_invocation::src_begin() const noexcept
@@ -940,6 +968,61 @@ expansion_forest::rescan_macro_invocation::const_src_iterator
 expansion_forest::rescan_macro_invocation::src_end() const noexcept
 {
   return const_src_iterator{_ref, const_src_iterator::_end_tag{}};
+}
+
+bool expansion_forest::rescan_macro_invocation::
+operator==(const rescan_macro_invocation &rhs) const noexcept
+{
+  return _ref == rhs._ref;
+}
+
+const bool expansion_forest::rescan_macro_invocation::is_nil_node()
+  const noexcept
+{
+  return _ref.is_nil_node();
+}
+
+const bool expansion_forest::rescan_macro_invocation::is_rescan_tree_root()
+  const noexcept
+{
+  return _ref.deref().is_rescan_tree_root();
+}
+
+const expansion_forest::rescan_macro_invocation
+expansion_forest::rescan_macro_invocation::get_rescan_parent() const noexcept
+{
+  return rescan_macro_invocation{
+	   _rescan_macro_invocation_ref{
+	      _ref.get_forest(),
+	      _ref.deref().get_rescan_parent()
+	   }
+	 };
+}
+
+const bool expansion_forest::rescan_macro_invocation::is_arg_tree_root()
+  const noexcept
+{
+  return _ref.deref().is_arg_tree_root();
+}
+
+const expansion_forest::rescan_macro_invocation
+expansion_forest::rescan_macro_invocation::get_arg_tree_owner() const noexcept
+{
+  assert(is_arg_tree_root());
+  const auto &forest_nodes = _ref.get_forest();
+  return rescan_macro_invocation{
+	   _rescan_macro_invocation_ref{
+	      forest_nodes,
+	      forest_nodes.arg_owner(_ref.get_node())
+	   }
+	 };
+}
+
+const pp_result::macro& expansion_forest::
+rescan_macro_invocation::get_macro() const noexcept
+{
+  assert(!is_arg_tree_root());
+  return _ref.deref().get_macro();
 }
 
 
@@ -1541,6 +1624,12 @@ expansion_forest::rescan_subtree::
 rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
   : _subtree_root(subtree_root)
 {}
+
+expansion_forest::rescan_subtree::
+operator rescan_macro_invocation() const noexcept
+{
+  return rescan_macro_invocation{_subtree_root};
+}
 
 expansion_forest::rescan_subtree::const_dfs_pre_iterator
 expansion_forest::rescan_subtree::begin() const noexcept
