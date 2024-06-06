@@ -140,18 +140,29 @@ namespace klp
       _scanned_macro_invocation
       _read_func_macro_invocation
 		(const pp_result::macro &m,
-		 const raw_pp_token_index invocation_begin,
-		 const std::function<_pp_token(const _read_ctl)> &token_reader);
+		 raw_pp_tokens_range invocation_range,
+		 const
+		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+				 (const _read_ctl, const raw_pp_tokens_range&)>
+		   &token_reader);
 
-      std::tuple<_pp_tokens, _pp_token, std::size_t, std::size_t>
+      std::tuple<_pp_tokens, _pp_token, std::size_t, std::size_t,
+		 raw_pp_token_index>
       _read_macro_arg
-		(const std::function<_pp_token(const _read_ctl)> &token_reader,
+		(raw_pp_tokens_range invocation_range,
+		 const
+		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+				 (const _read_ctl, const raw_pp_tokens_range&)>
+		    &token_reader,
 		 const bool variadic);
 
       _scanned_macro_invocation
       _read_defined_operator_invocation
-		(const raw_pp_token_index invocation_begin,
-		 const std::function<_pp_token(const _read_ctl)> &token_reader);
+		(raw_pp_tokens_range invocation_range,
+		 const
+		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+				 (const _read_ctl, const raw_pp_tokens_range&)>
+		   &token_reader);
 
     private:
       using _macro_expansion_forest =
