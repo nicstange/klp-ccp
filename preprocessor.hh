@@ -121,12 +121,6 @@ namespace klp
       _raw_pp_tokens_range_to_range_in_file(const raw_pp_tokens_range &r)
 	const noexcept;
 
-      const pp_result::header_inclusion_node&
-      _pp_token_to_source(const _pp_token &tok);
-
-      range_in_file _pp_token_to_range_in_file(const _pp_token &tok)
-	const noexcept;
-
       void _handle_pp_directive(const _read_ctl ctl);
 
       std::pair<bool, std::vector<_pp_token>>

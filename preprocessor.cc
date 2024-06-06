@@ -39,18 +39,15 @@ public:
     std::numeric_limits<raw_pp_token_index>::max();
 
   _pp_token(const pp_token::type type, const std::string &value,
-	    const raw_pp_tokens_range &token_source,
 	    const pp_result::used_macros &eh,
 	    const raw_pp_token_index passed_through_raw_token
 		    = not_passed_through);
 
   _pp_token(const pp_token::type type, const std::string &value,
-	    const raw_pp_tokens_range &token_source,
 	    const raw_pp_token_index passed_through_raw_token
 		    = not_passed_through);
 
   _pp_token(const pp_token::type type, std::string &&value,
-	    const raw_pp_tokens_range &token_source,
 	    const raw_pp_token_index passed_through_raw_token
 		    = not_passed_through) noexcept;
 
@@ -80,11 +77,6 @@ public:
   class pp_result::used_macros& expansion_history() noexcept
   {
     return _expansion_history;
-  }
-
-  const raw_pp_tokens_range& get_token_source() const noexcept
-  {
-    return _token_source;
   }
 
   void set_macro_invocation(pp_result::macro_invocation *mi)
@@ -160,7 +152,6 @@ private:
 
   pp_token::type _type;
   std::string _value;
-  raw_pp_tokens_range _token_source;
   pp_result::macro_invocation * _macro_invocation;
   raw_pp_token_index _passed_through_raw_token;
 
@@ -699,18 +690,6 @@ _raw_pp_tokens_range_to_range_in_file(const raw_pp_tokens_range &r)
   }
 }
 
-const pp_result::header_inclusion_node&
-preprocessor::_pp_token_to_source(const _pp_token &tok)
-{
-  return _raw_pp_tokens_range_to_source(tok.get_token_source());
-}
-
-range_in_file preprocessor::_pp_token_to_range_in_file(const _pp_token &tok)
-  const noexcept
-{
-  return _raw_pp_tokens_range_to_range_in_file(tok.get_token_source());
-}
-
 void preprocessor::_handle_pp_directive(const _read_ctl ctl)
 {
   const raw_pp_token_index raw_begin = _pp_result->_get_last_raw_index();
@@ -1060,7 +1039,6 @@ pp_token_index preprocessor::read_next_token()
 			  _pp_token{
 			    raw_toks[raw_tok.first].get_type(),
 			    raw_toks[raw_tok.first].get_value(),
-			    raw_pp_tokens_range{raw_tok.first},
 			    raw_tok.first,
 			  });
 
@@ -1069,7 +1047,6 @@ pp_token_index preprocessor::read_next_token()
 			  _pp_token{
 			    pp_token::type::eof,
 			    std::string{},
-			    raw_pp_tokens_range{raw_tok.first, raw_tok.first}
 			  });
   }
 }
@@ -1107,7 +1084,6 @@ preprocessor::_try_expand_raw
 	      (_pp_token{
 		 pp_token::type::eof,
 		   std::string{},
-		   raw_pp_tokens_range{raw_tok_index, raw_tok_index}
 	       },
 	       raw_pp_tokens_range{raw_tok_index, raw_tok_index}));
     }
@@ -1117,7 +1093,6 @@ preprocessor::_try_expand_raw
 	    (_pp_token{
 	      raw_tok.get_type(),
 	      raw_tok.get_value(),
-	      raw_pp_tokens_range{raw_tok_index},
 	      raw_tok_index,
 	     },
 	     raw_pp_tokens_range{raw_tok_index}));
@@ -1272,10 +1247,7 @@ preprocessor::_try_expand_raw
 		// Don't cross over a macro argument expansion's root
 		// entry.
 		return (std::make_pair
-			(_pp_token{
-			  pp_token::type::eof, std::string{},
-			    raw_pp_tokens_range{mi->get_source_range().end}
-			 },
+			(_pp_token{pp_token::type::eof, std::string{}},
 			 invocation_range));
 	      }
 	      it_read_stack_entry = it_next;
@@ -1299,12 +1271,9 @@ preprocessor::_try_expand_raw
 	      } else if (it_next->next_arg != it_next->args.size()) {
 		// Don't cross over a macro argument expansion's root
 		// entry.
-		return (std::make_pair
-			(_pp_token{
-			  pp_token::type::eof, std::string{},
-			    raw_pp_tokens_range{mi->get_source_range().end}
-			 },
-			 invocation_range));
+		return
+		  std::make_pair(_pp_token{pp_token::type::eof, std::string{}},
+				 invocation_range);
 	      }
 	      it_read_stack_entry = it_next;
 	    }
@@ -1418,27 +1387,24 @@ preprocessor::_try_expand_raw
 
 preprocessor::_pp_token::
 _pp_token(const pp_token::type type, const std::string &value,
-	  const raw_pp_tokens_range &token_source,
 	  const pp_result::used_macros &eh,
 	  const raw_pp_token_index passed_through_raw_token)
-  : _value(value), _token_source(token_source), _macro_invocation(nullptr),
+  : _value(value), _macro_invocation(nullptr),
     _expansion_history(std::move(eh)), _type(type),
     _passed_through_raw_token(passed_through_raw_token)
 {}
 
 preprocessor::_pp_token::
 _pp_token(const pp_token::type type, const std::string &value,
-	  const raw_pp_tokens_range &token_source,
 	  const raw_pp_token_index passed_through_raw_token)
-  : _value(value), _token_source(token_source), _macro_invocation(nullptr),
+  : _value(value), _macro_invocation(nullptr),
     _type(type), _passed_through_raw_token(passed_through_raw_token)
 {}
 
 preprocessor::_pp_token::
 _pp_token(const pp_token::type type, std::string &&value,
-	  const raw_pp_tokens_range &token_source,
 	  const raw_pp_token_index passed_through_raw_token) noexcept
-  : _value(std::move(value)), _token_source(token_source),
+  : _value(std::move(value)),
     _macro_invocation(nullptr), _type(type),
     _passed_through_raw_token(passed_through_raw_token)
 {}
@@ -1606,8 +1572,7 @@ _read_macro_arg(raw_pp_tokens_range invocation_range,
   std::size_t offset = 0;
   std::size_t n_read = 0;
   std::size_t lparens = 0;
-  _pp_token end_delim(pp_token::type::eof, std::string(),
-		      raw_pp_tokens_range());
+  _pp_token end_delim{pp_token::type::eof, std::string()};
   bool last_was_ws = false;
   bool in_trailing_ws = false;
 
@@ -1886,7 +1851,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
     _macro_expansion_forest::rescan_macro_invocation::output::fragment;
   auto &out_fragments = rmi._output;
   // Start the macro expansion with an empty token.
-  result.emplace_back(pp_token::type::empty, std::string{}, invocation_range);
+  result.emplace_back(pp_token::type::empty, std::string{});
   out_fragments._add_fragment(out_fragment::empty_tag{});
   bool last_was_ws_or_empty = true;
   for (raw_pp_tokens::size_type repl_pos = 0, next_repl_pos;
@@ -1912,8 +1877,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    !repl_toks[lookahead_repl_pos].is_punctuator("##")) {
 	  if (!args.back().empty()) {
 	    result.emplace_back(repl_toks[repl_pos].get_type(),
-				repl_toks[repl_pos].get_value(),
-				invocation_range);
+				repl_toks[repl_pos].get_value());
 	    out_fragments._add_fragment
 	      (repl_pos, next_no_ws_repl_pos + 1, false,
 	       out_fragment::conditional_comma_tag{});
@@ -1931,14 +1895,12 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       // Otherwise it's a concatenation.
       // Emit an empty token, if needed.
       if (!last_was_ws_or_empty) {
-	result.emplace_back(pp_token::type::empty, std::string{},
-			    invocation_range);
+	result.emplace_back(pp_token::type::empty, std::string{});
 	out_fragments._add_fragment(out_fragment::empty_tag{});
 	last_was_ws_or_empty = true;
       }
 
-      _pp_token concat_result{pp_token::type::empty, std::string{},
-			      invocation_range};
+      _pp_token concat_result{pp_token::type::empty, std::string{}};
       auto concat_frag = out_fragments._add_fragment
 	(repl_pos, out_fragment::concat_tag{});
       assert(!repl_toks[repl_pos].is_ws());
@@ -1967,7 +1929,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		assert(!it_arg_tok->is_newline());
 		result.emplace_back(it_arg_tok->get_type(),
 				    it_arg_tok->get_value(),
-				    invocation_range,
 				    it_arg_tok->expansion_history(),
 				    it_arg_tok->get_passed_through_raw_token());
 	      }
@@ -2036,7 +1997,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 				      _pp_token{
 					repl_toks[repl_pos].get_type(),
 					repl_toks[repl_pos].get_value(),
-					invocation_range
 				      },
 				      invocation_range);
 	      concat_frag.add_component
@@ -2059,7 +2019,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 				  _pp_token{
 					pp_token::type::str,
 					stringify(arg_index),
-					invocation_range
 				  },
 				  invocation_range);
 	  concat_frag.add_component(repl_pos, arg_id_tok_pos + 1,
@@ -2081,7 +2040,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 				    _pp_token{
 					arg.front().get_type(),
 					arg.front().get_value(),
-					invocation_range,
 					arg.front().expansion_history()
 				    },
 				    invocation_range);
@@ -2109,7 +2067,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	      assert(!it_arg_tok->is_newline());
 	      result.emplace_back(it_arg_tok->get_type(),
 				  it_arg_tok->get_value(),
-				  invocation_range,
 				  it_arg_tok->expansion_history(),
 				  it_arg_tok->get_passed_through_raw_token());
 	    }
@@ -2137,7 +2094,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 				    _pp_token{
 					repl_toks[repl_pos].get_type(),
 					repl_toks[repl_pos].get_value(),
-					invocation_range
 				    },
 				    invocation_range);
 	    concat_frag.add_component(repl_pos, out_fragment::repl_tag{});
@@ -2147,17 +2103,14 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       }
 
       result.emplace_back(std::move(concat_result));
-      result.emplace_back(pp_token::type::empty, std::string{},
-			  invocation_range);
+      result.emplace_back(pp_token::type::empty, std::string{});
       out_fragments._add_fragment(out_fragment::empty_tag{});
       last_was_ws_or_empty = true;
 
     } else if (is_stringification(repl_pos)) {
       const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
       const auto arg_index = resolve_arg(arg_id_tok_pos);
-      result.emplace_back(pp_token::type::str,
-			  stringify(arg_index),
-			  invocation_range);
+      result.emplace_back(pp_token::type::str, stringify(arg_index));
       out_fragments._add_fragment(repl_pos, arg_id_tok_pos + 1, arg_index,
 				  out_fragment::stringification_tag{});
       last_was_ws_or_empty = false;
@@ -2169,8 +2122,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 
       if (arg_index != no_arg_index) {
 	if (!last_was_ws_or_empty) {
-	  result.emplace_back(pp_token::type::empty, std::string{},
-			      invocation_range);
+	  result.emplace_back(pp_token::type::empty, std::string{});
 	  out_fragments._add_fragment(out_fragment::empty_tag{});
 	}
 
@@ -2178,23 +2130,21 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	for (const auto &arg_tok : arg) {
 	  assert(!arg_tok.is_newline());
 	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value(),
-			      invocation_range, arg_tok.expansion_history(),
+			      arg_tok.expansion_history(),
 			      arg_tok.get_passed_through_raw_token());
 	}
 	out_fragments._add_fragment(repl_pos, arg_index, arg.size(),
 				    out_fragment::arg_tag{});
 
 	if (!arg.empty() && !arg.back().is_empty()) {
-	  result.emplace_back(pp_token::type::empty, std::string{},
-			      invocation_range);
+	  result.emplace_back(pp_token::type::empty, std::string{});
 	  out_fragments._add_fragment(out_fragment::empty_tag{});
 	}
 	last_was_ws_or_empty = true;
 
       } else {
 	result.emplace_back(repl_toks[repl_pos].get_type(),
-			    repl_toks[repl_pos].get_value(),
-			    invocation_range);
+			    repl_toks[repl_pos].get_value());
 	out_fragments._add_fragment(repl_pos, out_fragment::repl_tag{});
 	last_was_ws_or_empty = repl_toks[repl_pos].is_ws();
 
@@ -2204,8 +2154,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 
   // Terminate the macro expansion with an empty token.
   if (!last_was_ws_or_empty) {
-    result.emplace_back(pp_token::type::empty, std::string{},
-			invocation_range);
+    result.emplace_back(pp_token::type::empty, std::string{});
     out_fragments._add_fragment(out_fragment::empty_tag{});
   }
 
@@ -2246,8 +2195,7 @@ _expand_one_builtin_special
     }
 
     result.emplace_back(pp_token::type::pp_number,
-			is_defined ? "1" : "0",
-			invocation_range, pp_result::used_macros{});
+			is_defined ? "1" : "0", pp_result::used_macros{});
     out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__FILE__") {
@@ -2255,12 +2203,12 @@ _expand_one_builtin_special
       _raw_pp_tokens_range_to_source(invocation_range);
 
     result.emplace_back(pp_token::type::str, source.get_filename(),
-			invocation_range, pp_result::used_macros{});
+			pp_result::used_macros{});
     out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__BASE_FILE__") {
     result.emplace_back(pp_token::type::str, _base_file,
-			invocation_range, pp_result::used_macros{});
+			pp_result::used_macros{});
     out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__LINE__") {
@@ -2271,19 +2219,19 @@ _expand_one_builtin_special
       const auto line = source.offset_to_line_col(range_in_file.begin).first;
 
       result.emplace_back(pp_token::type::pp_number, std::to_string(line),
-			  invocation_range, pp_result::used_macros{});
+			  pp_result::used_macros{});
       out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__INCLUDE_LEVEL__") {
     result.emplace_back(pp_token::type::pp_number,
 			std::to_string(_tokenizers.size() - 1),
-			invocation_range, pp_result::used_macros{});
+			pp_result::used_macros{});
     out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else if (m.get_name() == "__COUNTER__") {
     result.emplace_back(pp_token::type::pp_number,
 			std::to_string(__counter__++),
-			invocation_range, pp_result::used_macros{});
+			pp_result::used_macros{});
     out_fragments._add_fragment(1, out_fragment::builtin_special_tag{});
 
   } else {
@@ -2376,22 +2324,22 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
       throw pp_except(remark);
     }
 
-    return _pp_token(pp_token::type::id,
+    return _pp_token{pp_token::type::id,
 		     tok1.get_value() + tok2.get_value(),
-		     invocation_range, std::move(eh));
+		     std::move(eh)};
 
   } else if (tok1.get_type() == pp_token::type::pp_number &&
 	     tok2.get_type() == pp_token::type::id) {
-    return _pp_token(pp_token::type::pp_number,
+    return _pp_token{pp_token::type::pp_number,
 		     tok1.get_value() + tok2.get_value(),
-		     invocation_range, std::move(eh));
+		     std::move(eh)};
 
   } else if (tok1.get_type() == pp_token::type::pp_number &&
 	     tok2.get_type() == pp_token::type::punctuator &&
 	     (tok2.get_value() == "-" || tok2.get_value() == "+")) {
-    return _pp_token(pp_token::type::pp_number,
+    return _pp_token{pp_token::type::pp_number,
 		     tok1.get_value() + tok2.get_value(),
-		     invocation_range, std::move(eh));
+		     std::move(eh)};
   }
 
   if (tok1.get_type() != tok2.get_type()) {
@@ -2441,8 +2389,7 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
     }
   }
 
-  return _pp_token(tok1.get_type(), std::move(value),
-		   invocation_range, std::move(eh));
+  return _pp_token{tok1.get_type(), std::move(value), std::move(eh)};
 }
 
 void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
@@ -2544,17 +2491,12 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 		       _pp_token{
 			 raw_toks[raw_tok.first].get_type(),
 			 raw_toks[raw_tok.first].get_value(),
-			 raw_pp_tokens_range{raw_tok.first},
 			 raw_tok.first
 		       });
 
       } else {
 	_emit_pp_token(*_pp_result,
-		       _pp_token{
-			 pp_token::type::eof,
-			   std::string{},
-			   raw_pp_tokens_range{raw_tok.first, raw_tok.first}
-		       });
+		       _pp_token{pp_token::type::eof,std::string{}});
 	break;
       }
     }
@@ -2769,17 +2711,12 @@ _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
 		       _pp_token{
 			 raw_toks[raw_tok.first].get_type(),
 			 raw_toks[raw_tok.first].get_value(),
-			 raw_pp_tokens_range{raw_tok.first},
 			 raw_tok.first
 		       });
 
       } else {
 	_emit_pp_token(*_pp_result,
-		       _pp_token{
-			 pp_token::type::eof,
-			   std::string{},
-			   raw_pp_tokens_range{raw_tok.first, raw_tok.first}
-		       });
+		       _pp_token{pp_token::type::eof, std::string{}});
 	break;
       }
   }
