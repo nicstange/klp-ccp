@@ -1129,6 +1129,31 @@ rescan_macro_invocation::get_macro() const noexcept
   return _ref.deref().get_macro();
 }
 
+const expansion_forest::rescan_subtree
+expansion_forest::rescan_macro_invocation::
+get_arg_tree(const std::size_t arg_index) const noexcept {
+  const auto &m = get_macro();
+  assert(m.shall_expand_arg(arg_index));
+
+  // Only expanded args have an expansion tree associated with them.
+  std::size_t arg_tree_index = 0;
+  for (std::size_t i = 0; i < arg_index; ++i) {
+    arg_tree_index += m.shall_expand_arg(i);
+  }
+
+  auto arg_tree_root_node = _ref.get_forest().first_arg_of(_ref.get_node());
+  for (std::size_t i = 0; i < arg_tree_index; ++i) {
+    arg_tree_root_node = _ref.get_forest().next_arg(arg_tree_root_node);
+  }
+
+  return rescan_subtree{
+	   _rescan_macro_invocation_ref{
+	     _ref.get_forest(),
+	     arg_tree_root_node
+	   }
+  };
+}
+
 
 expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
 repl_ref() noexcept
