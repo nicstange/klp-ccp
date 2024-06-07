@@ -801,13 +801,107 @@ const expansion_forest::rescan_subtree expansion_forest::get_main_tree()
 }
 
 
-expansion_forest::rescan_output_segment::
-rescan_output_segment(const _rescan_macro_invocation_ref &emitting_node,
-		      const std::size_t begin,
-		      const std::size_t length) noexcept
-  : _emitting_node(emitting_node), _begin(begin),
-    _length(length)
+expansion_forest::rescan_output_segment::rescan_output_segment
+  (const _rescan_macro_invocation_ref &emitting_node,
+   const rescan_macro_invocation::output::tokens_range range_in_emitting_node)
+    noexcept
+    : _emitting_node{emitting_node},
+      _range_in_emitting_node{range_in_emitting_node}
 {}
+
+std::pair<expansion_forest::rescan_output_segment::const_fragment_iterator,
+	  expansion_forest::rescan_output_segment::const_fragment_iterator>
+expansion_forest::rescan_output_segment::
+fragments() const noexcept
+{
+  if (_emitting_node.is_nil_node()) {
+    return std::make_pair(const_fragment_iterator{},
+			  const_fragment_iterator{});
+  }
+
+  const auto overlapping_fragments =
+    _emitting_node.deref()._output._overlapping_fragments
+      (_range_in_emitting_node);
+  return
+    (std::make_pair
+     (const_fragment_iterator{*this, overlapping_fragments.first},
+      const_fragment_iterator{*this, overlapping_fragments.second}));
+}
+
+
+expansion_forest::rescan_output_segment::const_fragment_iterator::
+const_fragment_iterator() noexcept
+  : _seg{nullptr}, _it_frag{}
+{}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator::
+const_fragment_iterator(const rescan_output_segment &seg,
+			const _fragments_container_type::const_iterator it_frag)
+  noexcept
+  : _seg{&seg}, _it_frag{it_frag}
+{}
+
+bool expansion_forest::rescan_output_segment::const_fragment_iterator::
+operator==(const const_fragment_iterator &rhs) const noexcept
+{
+  return _seg == rhs._seg && _it_frag == rhs._it_frag;
+}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator::reference
+expansion_forest::rescan_output_segment::const_fragment_iterator::operator*()
+  const noexcept
+{
+  using rescan_macro_invocation_output =
+    expansion_forest::rescan_macro_invocation::output;
+  using fragment = rescan_macro_invocation_output::fragment;
+  using rescan_macro_invocation_output_range =
+    rescan_macro_invocation_output::tokens_range;
+
+  assert(_seg);
+  assert(_it_frag != _seg->_emitting_node.deref()._output._fragments.end());
+
+  const auto frag_out_range = _it_frag->get_out_range();
+  const  rescan_macro_invocation_output_range overlapping_out_range{
+    std::max(_seg->_range_in_emitting_node.begin, frag_out_range.begin),
+    std::min(_seg->_range_in_emitting_node.end, frag_out_range.end)
+  };
+  const fragment::out_tokens_range_in_fragment range_in_frag{
+    overlapping_out_range.begin - frag_out_range.begin,
+    overlapping_out_range.end - frag_out_range.begin,
+  };
+
+  return value_type{*_it_frag, range_in_frag};
+}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator&
+expansion_forest::rescan_output_segment::const_fragment_iterator::operator++()
+noexcept
+{
+  ++_it_frag;
+  return *this;
+}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator
+expansion_forest::rescan_output_segment::const_fragment_iterator::
+operator++(int) noexcept
+{
+  return const_fragment_iterator{*_seg, _it_frag++};
+}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator&
+expansion_forest::rescan_output_segment::const_fragment_iterator::operator--()
+  noexcept
+{
+  --_it_frag;
+  return *this;
+}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator
+expansion_forest::rescan_output_segment::const_fragment_iterator::
+operator--(int) noexcept
+{
+  return const_fragment_iterator{*_seg, _it_frag--};
+}
 
 
 expansion_forest::rescan_macro_invocation::const_src_iterator::
@@ -857,9 +951,14 @@ expansion_forest::rescan_macro_invocation::const_src_iterator::reference
 expansion_forest::rescan_macro_invocation::const_src_iterator::
 operator*() const noexcept
 {
+  const rescan_macro_invocation::output::tokens_range
+    out_range_in_emitting_node{
+      _src_begin,
+      _src_begin + _cur_src_segment_length(),
+    };
   return rescan_output_segment{
 	  _rescan_macro_invocation_ref{*_forest, _node},
-	  _src_begin, _cur_src_segment_length()
+	  out_range_in_emitting_node,
   };
 }
 
@@ -953,7 +1052,12 @@ operator nodes_size_type() const noexcept
 expansion_forest::rescan_macro_invocation::
 operator rescan_output_segment() const noexcept
 {
-  return rescan_output_segment{_ref, 0, _ref.deref().out_length()};
+  const output::tokens_range all_range{
+    0,
+    _ref.deref().out_length(),
+  };
+
+  return rescan_output_segment{_ref, all_range};
 }
 
 
@@ -1179,6 +1283,14 @@ add_component(const std::size_t repl_begin, const std::size_t repl_end,
 }
 
 
+bool
+expansion_forest::rescan_macro_invocation::output::tokens_range::
+operator<(const tokens_range &rhs) const noexcept
+{
+  return this->end <= rhs.begin;
+}
+
+
 expansion_forest::rescan_macro_invocation::output::fragment::
 fragment(const std::size_t repl_begin, const std::size_t out_begin,
 	 const repl_tag&)
@@ -1290,6 +1402,16 @@ expansion_forest::rescan_macro_invocation::output::fragment::
   }
 }
 
+const
+expansion_forest::rescan_macro_invocation::output::tokens_range
+expansion_forest::rescan_macro_invocation::output::fragment::get_out_range()
+  const noexcept
+{
+  return rescan_macro_invocation::output::tokens_range{
+	   _out_begin, _out_begin + _out_length
+	 };
+}
+
 
 
 expansion_forest::rescan_macro_invocation::output::output() noexcept
@@ -1392,6 +1514,31 @@ _add_fragment(const std::size_t out_length,
       _next_fragment_out_begin(), out_length, fragment::builtin_special_tag{}
     });
 }
+
+std::pair<expansion_forest::rescan_macro_invocation::output::
+	    _fragments_container_type::const_iterator,
+	  expansion_forest::rescan_macro_invocation::output::
+	    _fragments_container_type::const_iterator>
+expansion_forest::rescan_macro_invocation::output::
+_overlapping_fragments(const tokens_range &range) const noexcept
+{
+  struct cmp {
+    bool operator()(const tokens_range &range, const fragment &frag)
+      const noexcept
+    {
+      return range < frag.get_out_range();
+    }
+
+    bool operator()(const fragment &frag, const tokens_range &range)
+      const noexcept {
+      return frag.get_out_range() < range;
+    }
+  };
+
+  return std::equal_range(_fragments.cbegin(), _fragments.cend(),
+			  range, cmp{});
+}
+
 
 
 expansion_forest::rescan_subtree::const_dfs_pre_iterator::
@@ -1543,9 +1690,14 @@ expansion_forest::rescan_subtree::const_final_out_iterator::reference
 expansion_forest::rescan_subtree::const_final_out_iterator::operator*()
   const noexcept
 {
+  const auto out_begin_in_node = _consumed_out_lengths_stack.top();
+  const rescan_macro_invocation::output::tokens_range out_range_in_node{
+    out_begin_in_node,
+    out_begin_in_node + _cur_out_segment_length()
+  };
   return rescan_output_segment{
     _rescan_macro_invocation_ref{*_forest, _stack_top_node},
-    _consumed_out_lengths_stack.top(), _cur_out_segment_length()
+    out_range_in_node
   };
 }
 

@@ -753,20 +753,7 @@ namespace klp
 	public:
 	  class rescan_subtree;
 
-	  class rescan_output_segment
-	  {
-	  private:
-	    friend class expansion_forest;
-
-	    rescan_output_segment
-	      (const _rescan_macro_invocation_ref &emitting_node,
-	       const std::size_t begin,
-	       const std::size_t length) noexcept;
-	    _rescan_macro_invocation_ref _emitting_node;
-	    std::size_t _begin;
-	    std::size_t _length;
-	  }; // class rescan_output_segment
-
+	  class rescan_output_segment;
 
 	  using nodes_size_type = _forest_nodes::size_type;
 
@@ -820,6 +807,15 @@ namespace klp
 	    class output
 	    {
 	    public:
+	      class tokens_range
+	      {
+	      public:
+		bool operator<(const tokens_range &rhs) const noexcept;
+
+		std::size_t begin;
+		std::size_t end;
+	      };
+
 	      class fragment
 	      {
 	      private:
@@ -951,9 +947,24 @@ namespace klp
 		  std::vector<component> _components;
 		}; // class concat_sequence
 
+		class out_tokens_range_in_fragment
+		{
+		public:
+		  std::size_t begin_offset;
+		  std::size_t end_offset;
+		};
+
 		fragment(fragment &&seg);
 
 		~fragment() noexcept;
+
+		const std::size_t get_out_begin() const noexcept
+		{ return _out_begin; }
+
+		const std::size_t get_out_length() const noexcept
+		{ return _out_length; }
+
+		const output::tokens_range get_out_range() const noexcept;
 
 	      private:
 		friend class output;
@@ -1022,6 +1033,8 @@ namespace klp
 
 		op _op;
 
+		// Relative to the emitting rescan macro invocation's
+		// output's beginning.
 		std::size_t _out_begin;
 		std::size_t _out_length;
 
@@ -1043,7 +1056,10 @@ namespace klp
 	      std::size_t out_length() const noexcept;
 
 	    private:
+	      friend class expansion_forest;
 	      friend class preprocessor;
+
+	      using _fragments_container_type = std::vector<fragment>;
 
 	      std::size_t _next_fragment_out_begin() const noexcept;
 
@@ -1074,7 +1090,9 @@ namespace klp
 	      void _add_fragment(const std::size_t out_length,
 				 const fragment::builtin_special_tag&);
 
-	      using _fragments_container_type = std::vector<fragment>;
+	      std::pair<_fragments_container_type::const_iterator,
+			_fragments_container_type::const_iterator>
+	      _overlapping_fragments(const tokens_range &range) const noexcept;
 
 	      _fragments_container_type _fragments;
 	    }; // class output
@@ -1109,6 +1127,71 @@ namespace klp
 	    _rescan_macro_invocation_ref _ref;
 	  }; // class rescan_macro_invocation
 
+	  class rescan_output_segment
+	  {
+	  public:
+	    class const_fragment_iterator
+	    {
+	    private:
+	      using fragment = rescan_macro_invocation::output::fragment;
+	    public:
+	      using iterator_category = std::bidirectional_iterator_tag;
+
+	      struct value_type
+	      {
+		const fragment &fragment;
+		const fragment::out_tokens_range_in_fragment range_in_fragment;
+	      };
+
+	      using reference = value_type;
+
+	      const_fragment_iterator() noexcept;
+
+	      bool operator==(const const_fragment_iterator &rhs)
+		const noexcept;
+
+	      bool operator!=(const const_fragment_iterator &rhs) const noexcept
+	      { return !(*this == rhs); }
+
+	      reference operator*() const noexcept;
+
+	      const_fragment_iterator& operator++() noexcept;
+	      const_fragment_iterator operator++(int) noexcept;
+
+	      const_fragment_iterator& operator--() noexcept;
+	      const_fragment_iterator operator--(int) noexcept;
+
+	    private:
+	      friend class rescan_output_segment;
+
+	      using _fragments_container_type =
+		rescan_macro_invocation::output::_fragments_container_type;
+
+	      const_fragment_iterator
+		(const rescan_output_segment &seg,
+		 const _fragments_container_type::const_iterator it_frag)
+		noexcept;
+
+	      const rescan_output_segment *_seg;
+	      _fragments_container_type::const_iterator _it_frag;
+	    }; // class const_fragment_iterator
+
+	    std::pair<const_fragment_iterator, const_fragment_iterator>
+	    fragments() const noexcept;
+
+	  private:
+	    friend class expansion_forest;
+
+	    rescan_output_segment
+	      (const _rescan_macro_invocation_ref &emitting_node,
+	       const rescan_macro_invocation::output::tokens_range
+		range_in_emitting_node) noexcept;
+
+	    _rescan_macro_invocation_ref _emitting_node;
+	    rescan_macro_invocation::output::tokens_range
+	      _range_in_emitting_node;
+	  }; // class rescan_output_segment
+
 	private:
 	  class _rescan_macro_invocation
 	  {
@@ -1133,7 +1216,7 @@ namespace klp
 	    const macro& get_macro() const noexcept;
 
 	  private:
-	    friend class _forest_nodes;
+	    friend class expansion_forest;
 	    friend class preprocessor;
 
 	    _rescan_macro_invocation
