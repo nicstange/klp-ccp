@@ -825,14 +825,6 @@ namespace klp
 		friend class output;
 		friend class preprocessor;
 
-		struct repl_tag{};
-		struct arg_tag{};
-		struct stringification_tag{};
-		struct concat_tag{};
-		struct conditional_comma_tag{};
-		struct builtin_special_tag{};
-		struct empty_tag{};
-
 	      public:
 		enum class op
 		{
@@ -844,6 +836,14 @@ namespace klp
 		  empty,
 		  builtin_special,
 		};
+
+		struct repl_tag{};
+		struct arg_tag{};
+		struct stringification_tag{};
+		struct concat_tag{};
+		struct conditional_comma_tag{};
+		struct builtin_special_tag{};
+		struct empty_tag{};
 
 		class repl_ref
 		{
@@ -965,6 +965,10 @@ namespace klp
 		{ return _out_length; }
 
 		const output::tokens_range get_out_range() const noexcept;
+
+		template<typename callable_type>
+		auto operator()(callable_type &&c) const ->
+		  decltype(c(std::declval<repl_tag>()));
 
 	      private:
 		friend class output;

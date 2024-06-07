@@ -18,6 +18,7 @@
 
 #include <cassert>
 #include "pp_result.hh"
+#include "pp_result_impl.hh"
 #include "raw_pp_token.hh"
 #include "source_reader.hh"
 #include <limits>
