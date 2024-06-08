@@ -1201,6 +1201,12 @@ namespace klp
 	      (const rescan_macro_invocation::output::tokens_range &limit)
 	      const noexcept;
 
+	    const rescan_macro_invocation get_emitting_node() const noexcept;
+
+	    const rescan_macro_invocation::output::tokens_range&
+	    get_out_range_in_emitting_node() const noexcept
+	    { return _range_in_emitting_node; }
+
 	  private:
 	    friend class expansion_forest;
 

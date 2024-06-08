@@ -858,6 +858,12 @@ crop_relative(const rescan_macro_invocation::output::tokens_range &limit)
 	      });
 }
 
+const expansion_forest::rescan_macro_invocation
+expansion_forest::rescan_output_segment::get_emitting_node() const noexcept
+{
+  return rescan_macro_invocation{_emitting_node};
+}
+
 
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 const_fragment_iterator() noexcept
