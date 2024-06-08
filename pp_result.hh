@@ -812,6 +812,8 @@ namespace klp
 	      public:
 		bool operator<(const tokens_range &rhs) const noexcept;
 
+		const std::size_t length() const noexcept;
+
 		std::size_t begin;
 		std::size_t end;
 	      };

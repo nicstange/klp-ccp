@@ -1316,6 +1316,13 @@ operator<(const tokens_range &rhs) const noexcept
   return this->end <= rhs.begin;
 }
 
+const std::size_t
+expansion_forest::rescan_macro_invocation::output::tokens_range::
+length() const noexcept
+{
+  return end - begin;
+}
+
 
 expansion_forest::rescan_macro_invocation::output::fragment::
 fragment(const std::size_t repl_begin, const std::size_t out_begin,
