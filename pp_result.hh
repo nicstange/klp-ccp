@@ -1192,6 +1192,15 @@ namespace klp
 	    std::pair<const_fragment_iterator, const_fragment_iterator>
 	    fragments() const noexcept;
 
+	    const rescan_output_segment
+	    crop(const rescan_macro_invocation::output::tokens_range &limit)
+	      const noexcept;
+
+	    const rescan_output_segment
+	    crop_relative
+	      (const rescan_macro_invocation::output::tokens_range &limit)
+	      const noexcept;
+
 	  private:
 	    friend class expansion_forest;
 

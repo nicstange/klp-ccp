@@ -829,6 +829,35 @@ fragments() const noexcept
       const_fragment_iterator{*this, overlapping_fragments.second}));
 }
 
+const expansion_forest::rescan_output_segment
+expansion_forest::rescan_output_segment::
+crop(const rescan_macro_invocation::output::tokens_range &limit)
+  const noexcept
+{
+  // Only cropping of overlapping ranges is supported,
+  // otherwise we might end up with end < begin below.
+  assert(limit.begin <= _range_in_emitting_node.end &&
+	 limit.end >= _range_in_emitting_node.begin);
+  return rescan_output_segment{
+    _emitting_node,
+    rescan_macro_invocation::output::tokens_range{
+      std::max(_range_in_emitting_node.begin, limit.begin),
+      std::min(_range_in_emitting_node.end, limit.end),
+    }
+  };
+}
+
+const expansion_forest::rescan_output_segment
+expansion_forest::rescan_output_segment::
+crop_relative(const rescan_macro_invocation::output::tokens_range &limit)
+  const noexcept
+{
+  return crop(rescan_macro_invocation::output::tokens_range{
+		_range_in_emitting_node.begin + limit.begin,
+		_range_in_emitting_node.begin + limit.end
+	      });
+}
+
 
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 const_fragment_iterator() noexcept
