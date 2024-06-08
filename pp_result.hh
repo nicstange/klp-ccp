@@ -874,6 +874,10 @@ namespace klp
 
 		class arg_ref
 		{
+		public:
+		  const std::size_t get_arg_index() const noexcept
+		  { return _arg_index; }
+
 		private:
 		  friend class fragment;
 		  friend class _concat_builder;
