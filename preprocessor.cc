@@ -25,6 +25,9 @@
 #include "semantic_except.hh"
 #include "path.hh"
 #include "pp_expr_parser_driver.hh"
+#include "callables_wrapper.hh"
+#include "type_set.hh"
+#include "pp_result_impl.hh"
 
 using namespace klp::ccp;
 
@@ -1288,7 +1291,9 @@ preprocessor::_try_expand_raw
       m = nullptr;
       it_m = _macros.find(cur_out_token.get_value());
       if (it_m != _macros.end()) {
-	if (cur_out_token.expansion_history().count(it_m->second.get())) {
+	if (_macro_is_in_id_tok_expansion_history
+	    (it_m->second.get(), mi->_expansion_forest, t.node,
+	     cur_out_token_index)) {
 	  result_stack.top().emplace_back(std::move(cur_out_token));
 	  continue;
 	}
@@ -1381,6 +1386,108 @@ preprocessor::_try_expand_raw
 
   assert(result_stack.size() == 1);
   return std::make_pair(true, std::move(result_stack.top()));
+}
+
+bool preprocessor::_macro_is_in_id_tok_expansion_history
+(const pp_result::macro &m,
+ const _macro_expansion_forest &forest,
+ _macro_expansion_forest::nodes_size_type emitting_node_index,
+ std::size_t id_tok_index) const noexcept
+{
+  using rescan_macro_invocation =
+    _macro_expansion_forest::rescan_macro_invocation;
+  using rescan_output_segment =
+    _macro_expansion_forest::rescan_output_segment;
+  using rescan_out_tokens_range =
+    rescan_macro_invocation::output::tokens_range;
+  using rescan_out_fragment =
+    rescan_macro_invocation::output::fragment;
+
+  assert(emitting_node_index !=
+	 _macro_expansion_forest::nodes_size_type::invalid());
+  auto emitting_node = forest[emitting_node_index];
+  while (!emitting_node.is_nil_node()) {
+
+    if (!emitting_node.is_arg_tree_root()) {
+      if (&emitting_node.get_macro() == &m)
+	return true;
+
+      const auto seg =
+	static_cast<rescan_output_segment>(emitting_node)
+	.crop(rescan_out_tokens_range{id_tok_index, id_tok_index + 1});
+      const auto &src_frag = *seg.fragments().first;
+      src_frag.fragment
+	(wrap_callables<no_default_action>
+	 ([&](const rescan_out_fragment::repl_tag&) {
+	   const auto &src = *emitting_node.src_begin();
+	   id_tok_index = src.get_out_range_in_emitting_node().begin;
+	   emitting_node = src.get_emitting_node();
+	  },
+	  [&](const rescan_out_fragment::arg_tag&,
+	      const rescan_out_fragment::arg_ref &arg) {
+	    id_tok_index = src_frag.range_in_fragment.begin_offset;
+	    const auto arg_expansion_tree =
+	      emitting_node.get_arg_tree(arg.get_arg_index());
+	    auto arg_out_end = arg_expansion_tree.final_out_end();
+	    auto it_arg_out = arg_expansion_tree.final_out_begin();
+	    while (true) {
+	      assert(it_arg_out != arg_out_end);
+	      const auto &arg_out_seg = *it_arg_out;
+	      const auto &arg_out_seg_range =
+		arg_out_seg.get_out_range_in_emitting_node();
+	      if (id_tok_index < arg_out_seg_range.length()) {
+		id_tok_index +=  arg_out_seg_range.begin;
+		emitting_node = arg_out_seg.get_emitting_node();
+		break;
+	      }
+	      id_tok_index -= arg_out_seg_range.length();
+	      ++it_arg_out;
+	    }
+	  },
+	  [](const rescan_out_fragment::stringification_tag&,
+	     const rescan_out_fragment::stringification&) {
+	    assert(0);
+	    __builtin_unreachable();
+	  },
+	  [&](const rescan_out_fragment::concat_tag&,
+	      const rescan_out_fragment::concat_sequence&) {
+	    const auto &src = *emitting_node.src_begin();
+	    id_tok_index = src.get_out_range_in_emitting_node().begin;
+	    emitting_node = src.get_emitting_node();
+	  },
+	  [](const rescan_out_fragment::conditional_comma_tag&, bool) {
+	    assert(0);
+	    __builtin_unreachable();
+	  },
+	  [](const rescan_out_fragment::empty_tag&) {
+	    assert(0);
+	    __builtin_unreachable();
+	  },
+	  [](const rescan_out_fragment::builtin_special_tag&) {
+	    assert(0);
+	    __builtin_unreachable();
+	  }));
+
+    } else {
+      const auto arg_src_end = emitting_node.src_end();
+      auto it_arg_src = emitting_node.src_begin();
+      while (true) {
+	assert(it_arg_src != arg_src_end);
+	const auto &arg_src_seg = *it_arg_src;
+	const auto &arg_src_seg_range =
+	  arg_src_seg.get_out_range_in_emitting_node();
+	if (id_tok_index < arg_src_seg_range.length()) {
+	  id_tok_index +=  arg_src_seg_range.begin;
+	  emitting_node = arg_src_seg.get_emitting_node();
+	  break;
+	}
+	id_tok_index -= arg_src_seg_range.length();
+	++it_arg_src;
+      }
+    }
+  }
+
+  return false;
 }
 
 

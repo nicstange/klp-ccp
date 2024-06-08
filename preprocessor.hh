@@ -92,6 +92,9 @@ namespace klp
       typedef std::vector<_pp_token> _pp_tokens;
       struct _cond_incl_state;
 
+      using _macro_expansion_forest =
+	pp_result::macro_invocation::expansion_forest;
+
       template<typename T>
       void _grab_remarks_from(T &from);
 
@@ -131,6 +134,12 @@ namespace klp
 	   &raw_token_reader,
 	 const bool from_cond_incl_cond);
 
+      bool _macro_is_in_id_tok_expansion_history
+	(const pp_result::macro &m,
+	 const _macro_expansion_forest &forest,
+	 _macro_expansion_forest::nodes_size_type emitting_node_index,
+	 std::size_t id_tok_index) const noexcept;
+
       _scanned_macro_invocation
       _read_func_macro_invocation
 		(const pp_result::macro &m,
@@ -159,9 +168,6 @@ namespace klp
 		   &token_reader);
 
     private:
-      using _macro_expansion_forest =
-	pp_result::macro_invocation::expansion_forest;
-
       std::vector<_pp_token>
       _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		  pp_result::macro_invocation &mi,
