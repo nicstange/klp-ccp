@@ -19,7 +19,7 @@ namespace klp
       case op::concat:
 	return c(concat_tag{}, _concat_sequence);
       case op::conditional_comma:
-	return c(conditional_comma_tag{}, _out_length == 0);
+	return c(conditional_comma_tag{}, _out_range.length() == 0);
       case op::empty:
 	return c(empty_tag{});
       case op::builtin_special:

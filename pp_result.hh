@@ -963,13 +963,8 @@ namespace klp
 
 		~fragment() noexcept;
 
-		const std::size_t get_out_begin() const noexcept
-		{ return _out_begin; }
-
-		const std::size_t get_out_length() const noexcept
-		{ return _out_length; }
-
-		const output::tokens_range get_out_range() const noexcept;
+		const tokens_range& get_out_range() const noexcept
+		{ return _out_range; }
 
 		template<typename callable_type>
 		auto operator()(callable_type &&c) const ->
@@ -1044,8 +1039,7 @@ namespace klp
 
 		// Relative to the emitting rescan macro invocation's
 		// output's beginning.
-		std::size_t _out_begin;
-		std::size_t _out_length;
+		tokens_range _out_range;
 
 		repl_ref _repl;
 
