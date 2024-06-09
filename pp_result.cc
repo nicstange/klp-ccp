@@ -349,11 +349,10 @@ pp_result::macro_nondef_constraints::find(const std::string &id) const noexcept
 
 
 pp_result::macro_invocation::
-macro_invocation(const macro &m,
-		 const raw_pp_tokens_range &invocation_range,
-		 const std::size_t src_length)
-  : _invocation_range{invocation_range},
-    _expansion_forest(m, invocation_range.begin, src_length)
+macro_invocation
+(const macro &m,
+ expansion_forest::invocation_source &&initial_invocation_source)
+  : _expansion_forest{m, std::move(initial_invocation_source)}
 {
   _used_macros += m;
 }
@@ -368,6 +367,12 @@ get_output_range(const pp_result &pp_result) const noexcept
   // their relative position within the raw_pp_tokens is getting
   // returned.
   return pp_result.raw_pp_tokens_range_to_nonraw(get_source_range());
+}
+
+const raw_pp_tokens_range pp_result::macro_invocation::
+get_source_range() const noexcept {
+  return
+    _expansion_forest.get_invocation_source().get_total_spanned_source_range();
 }
 
 const pp_result::macro_invocation::passed_through_arg_token*
@@ -439,12 +444,12 @@ _add_emerged_tok(const pp_token_index tok)
 using expansion_forest=
   pp_result::macro_invocation::expansion_forest;
 
-expansion_forest::_forest_nodes::_forest_nodes(const macro &m,
-					       const std::size_t src_begin,
-					       const std::size_t src_length)
+expansion_forest::_forest_nodes::
+_forest_nodes(const macro &m,
+	      const std::size_t initial_src_length)
 {
   // Add initial root node.
-  add_rescan_invocation(size_type::invalid(), m, src_begin, src_length);
+  add_rescan_invocation(size_type::invalid(), m, 0, initial_src_length);
 }
 
 expansion_forest::_rescan_macro_invocation&
@@ -779,10 +784,14 @@ is_nil_node() const noexcept
   return _node == _forest_nodes::size_type::invalid();
 }
 
-expansion_forest::expansion_forest(const macro &m,
-				   const std::size_t src_begin,
-				   const std::size_t src_length)
-  : _forest(m, src_begin, src_length)
+expansion_forest::expansion_forest
+(const macro &m,
+   expansion_forest::invocation_source &&initial_invocation_source)
+  : _forest{
+      m,
+      initial_invocation_source._get_total_invocation_range().length()
+    },
+    _invocation_src{std::move(initial_invocation_source)}
 {}
 
 const expansion_forest::rescan_macro_invocation expansion_forest::
@@ -1343,6 +1352,13 @@ add_component(const std::size_t repl_begin, const std::size_t repl_end,
   frag._repl._length = repl_end - frag._repl._begin;
 }
 
+
+bool
+expansion_forest::rescan_macro_invocation::output::tokens_range::
+operator==(const tokens_range &rhs) const noexcept
+{
+  return this->begin == rhs.begin && this->end == rhs.end;
+}
 
 bool
 expansion_forest::rescan_macro_invocation::output::tokens_range::
@@ -1939,6 +1955,180 @@ std::size_t expansion_forest::rescan_subtree::total_out_length() const
   }
   return total_out_length;
 }
+
+
+expansion_forest::invocation_source::segment::
+operator raw_pp_tokens_range() const noexcept
+{
+  return raw_pp_tokens_range{
+    raw_pp_tokens_begin,
+    raw_pp_tokens_begin + invocation_range.length()
+  };
+}
+
+
+expansion_forest::invocation_source::const_segment_iterator::
+const_segment_iterator() noexcept
+  : _it_seg{},
+    _invocation_range{
+      std::numeric_limits<std::size_t>::max(),
+      std::numeric_limits<std::size_t>::max()
+    }
+{}
+
+expansion_forest::invocation_source::const_segment_iterator::
+const_segment_iterator
+(const _segments_container_type::const_iterator it_seg,
+ const rescan_macro_invocation::output::tokens_range invocation_range)
+noexcept
+  : _it_seg{it_seg}, _invocation_range{invocation_range}
+{}
+
+bool expansion_forest::invocation_source::const_segment_iterator::
+operator==(const const_segment_iterator &rhs) const noexcept
+{
+  assert(_invocation_range == rhs._invocation_range);
+  return _it_seg == rhs._it_seg;
+}
+
+expansion_forest::invocation_source::const_segment_iterator::reference
+expansion_forest::invocation_source::const_segment_iterator::
+operator*() const noexcept
+{
+  auto s = *_it_seg;
+
+  if (_invocation_range.begin > s.invocation_range.begin) {
+    s.raw_pp_tokens_begin +=
+       _invocation_range.begin - s.invocation_range.begin;
+    s.invocation_range.begin = _invocation_range.begin;
+  }
+  s.invocation_range.end = std::min(s.invocation_range.end,
+				    _invocation_range.end);
+
+  return s;
+}
+
+expansion_forest::invocation_source::const_segment_iterator&
+expansion_forest::invocation_source::const_segment_iterator::
+operator++() noexcept
+{
+  ++_it_seg;
+  return *this;
+}
+
+expansion_forest::invocation_source::const_segment_iterator
+expansion_forest::invocation_source::const_segment_iterator::
+operator++(int) noexcept
+{
+  return const_segment_iterator{_it_seg++, _invocation_range};
+}
+
+expansion_forest::invocation_source::const_segment_iterator&
+expansion_forest::invocation_source::const_segment_iterator::
+operator--() noexcept
+{
+  --_it_seg;
+  return *this;
+}
+
+expansion_forest::invocation_source::const_segment_iterator
+expansion_forest::invocation_source::const_segment_iterator::
+operator--(int) noexcept
+{
+  return const_segment_iterator{_it_seg--, _invocation_range};
+}
+
+
+expansion_forest::invocation_source::const_segment_iterator
+expansion_forest::invocation_source::
+segments_begin() const noexcept
+{
+  return const_segment_iterator{
+    _segments.cbegin(),
+    _get_total_invocation_range()
+  };
+}
+
+expansion_forest::invocation_source::const_segment_iterator
+expansion_forest::invocation_source::
+segments_end() const noexcept
+{
+    return const_segment_iterator{
+    _segments.cend(),
+    _get_total_invocation_range()
+  };
+}
+
+std::pair<expansion_forest::invocation_source::const_segment_iterator,
+	  expansion_forest::invocation_source::const_segment_iterator>
+expansion_forest::invocation_source::
+overlapping_segments
+(const rescan_macro_invocation::output::tokens_range &range)
+  const noexcept
+{
+  struct cmp {
+    bool operator()(const segment &seg,
+		    const rescan_macro_invocation::output::tokens_range &range)
+      const noexcept
+    {
+      return seg.invocation_range < range;
+    }
+
+    bool operator()(const rescan_macro_invocation::output::tokens_range &range,
+		    const segment &seg)
+      const noexcept
+    {
+      return range < seg.invocation_range;
+    }
+  };
+
+  const auto r = std::equal_range(_segments.cbegin(),
+				  _segments.cend(),
+				  range, cmp{});
+  return std::make_pair(const_segment_iterator{r.first, range},
+			const_segment_iterator{r.second, range});
+}
+
+const raw_pp_tokens_range expansion_forest::invocation_source::
+get_total_spanned_source_range() const noexcept
+{
+  assert(!_segments.empty());
+  return raw_pp_tokens_range{
+    static_cast<raw_pp_tokens_range>(_segments.front()).begin,
+    static_cast<raw_pp_tokens_range>(_segments.back()).end,
+  };
+}
+
+void expansion_forest::invocation_source::
+_append_raw_pp_token(const raw_pp_token_index raw_tok_index) {
+  if (!_segments.empty() &&
+      static_cast<raw_pp_tokens_range>(_segments.back()).end == raw_tok_index) {
+    ++_segments.back().invocation_range.end;
+  } else {
+    const auto invocation_range_begin =
+      !_segments.empty() ? _segments.back().invocation_range.end : 0;
+    _segments.emplace_back
+      (segment{
+	  raw_tok_index,
+	  rescan_macro_invocation::output::tokens_range{
+	    invocation_range_begin,
+	    invocation_range_begin + 1,
+	  }
+       });
+  }
+}
+
+const expansion_forest::rescan_macro_invocation::output::tokens_range
+expansion_forest::invocation_source::
+_get_total_invocation_range() const noexcept
+{
+  assert(!_segments.empty());
+  return rescan_macro_invocation::output::tokens_range{
+    _segments.front().invocation_range.begin,
+    _segments.back().invocation_range.end,
+  };
+}
+
 
 
 pp_result::_pp_tokens_origins::_pp_tokens_origins() noexcept = default;
@@ -3498,21 +3688,13 @@ void pp_result::_add_macro_undef(const std::string &name,
 
 pp_result::macro_invocation& pp_result::
 _add_macro_invocation(const macro &m,
-		      const raw_pp_tokens_range &invocation_range,
-		      const std::size_t src_length)
+		      macro_invocation::expansion_forest::invocation_source
+			&&initial_invocation_source)
 {
   _macro_invocations.push_back
     (std::unique_ptr<macro_invocation>
-	{new macro_invocation{m, invocation_range, src_length}});
+     {new macro_invocation{m, std::move(initial_invocation_source)}});
   return *_macro_invocations.back();
-}
-
-void pp_result::
-_extend_macro_invocation_range(macro_invocation &invocation,
-			       const raw_pp_token_index new_end)
-{
-  assert(new_end >= invocation._invocation_range.end);
-  invocation._invocation_range.end = new_end;
 }
 
 std::pair<pp_result::used_macros, pp_result::macro_nondef_constraints>

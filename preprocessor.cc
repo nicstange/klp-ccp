@@ -1060,6 +1060,10 @@ preprocessor::_try_expand_raw
 
   using expansion_forest_nodes = _macro_expansion_forest::_forest_nodes;
 
+  _macro_expansion_forest::invocation_source initial_invocation_source;
+  _macro_expansion_forest::invocation_source *invocation_source =
+    &initial_invocation_source;
+
   auto read_raw_tok = [&](const _read_ctl read_ctl,
 			  const raw_pp_tokens_range&) {
     const auto next_raw_tok = raw_token_reader(read_ctl);
@@ -1072,6 +1076,9 @@ preprocessor::_try_expand_raw
 	       },
 	       raw_pp_tokens_range{raw_tok_index, raw_tok_index}));
     }
+
+    if (read_ctl != _read_ctl::peek)
+      invocation_source->_append_raw_pp_token(raw_tok_index);
 
     const auto &raw_tok = raw_tokens[raw_tok_index];
     return (std::make_pair
@@ -1105,25 +1112,25 @@ preprocessor::_try_expand_raw
 	return std::make_pair(false, _pp_tokens_type{});
     }
 
+    initial_invocation_source._append_raw_pp_token(id_tok_index);
     _scanned_macro_invocation smi =
       _read_func_macro_invocation(*m, id_tok_index, read_raw_tok);
     invocation_range.end = smi.invocation_end;
 
-    mi = &_pp_result->_add_macro_invocation(*m,
-					    raw_pp_tokens_range{
-					      id_tok_index, smi.invocation_end
-					    },
-					    smi.n_tokens);
+    mi =
+      &_pp_result->_add_macro_invocation(*m,
+					 std::move(initial_invocation_source));
+    invocation_source = &mi->_expansion_forest._invocation_src;
     expansion_stack.emplace_back(expansion_forest_nodes::size_type{0},
 				 *m, std::move(smi.args_offsets),
 				 std::move(smi.args));
 
   } else {
-    mi = &_pp_result->_add_macro_invocation(*m,
-					    raw_pp_tokens_range{
-					      id_tok_index, id_tok_index + 1
-					    },
-					    1);
+    initial_invocation_source._append_raw_pp_token(id_tok_index);
+    mi =
+      &_pp_result->_add_macro_invocation(*m,
+					 std::move(initial_invocation_source));
+    invocation_source = &mi->_expansion_forest._invocation_src;
     expansion_stack.emplace_back(expansion_forest_nodes::size_type{0},
 				 *m);
 
@@ -1350,8 +1357,6 @@ preprocessor::_try_expand_raw
 					     cur_out_token_index, smi.n_tokens);
 	expansion_stack.emplace_back(node, *m, std::move(smi.args_offsets),
 				     std::move(smi.args));
-	if (mi->get_source_range().end < smi.invocation_end)
-	  _pp_result->_extend_macro_invocation_range(*mi, smi.invocation_end);
 	break;
 
       } else {

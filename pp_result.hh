@@ -656,9 +656,7 @@ namespace klp
 	      _container_type::size_type _n;
 	    }; // class size_type
 
-	    _forest_nodes(const macro &m,
-			  const std::size_t src_begin,
-			  const std::size_t src_length);
+	    _forest_nodes(const macro &m, const std::size_t initial_src_length);
 
 	    _rescan_macro_invocation& operator[](const size_type n) noexcept;
 
@@ -810,6 +808,11 @@ namespace klp
 	      class tokens_range
 	      {
 	      public:
+		bool operator==(const tokens_range &rhs) const noexcept;
+
+		bool operator!=(const tokens_range &rhs) const noexcept
+		{ return !(*this == rhs); }
+
 		bool operator<(const tokens_range &rhs) const noexcept;
 
 		const std::size_t length() const noexcept;
@@ -1259,10 +1262,11 @@ namespace klp
 	    _forest_nodes::size_type _rescan_parent;
 	    std::size_t _nargs;
 
-	    /*
-	     * Relative to _parent's output begin, if any.
-	     * Otherwise relative to raw_pp_tokens.
-	     */
+	    // For rescan childs, relative to _parent's output begin, if any,
+	    // otherwise relative to the outer invocation_source.
+	    // For argument nodes, relative to the owner's _parent's
+	    // output begin, if any, otherwise relative to the outer
+	    // invocation_source.
 	    std::size_t _src_begin;
 	    std::size_t _src_length;
 
@@ -1382,19 +1386,98 @@ namespace klp
 	    _rescan_macro_invocation_ref _subtree_root;
 	  }; // class rescan_subtree
 
-	  expansion_forest(const macro &m,
-			   const std::size_t src_begin,
-			   const std::size_t src_length);
+	  class invocation_source
+	  {
+	  public:
+	    struct segment
+	    {
+	      explicit operator raw_pp_tokens_range() const noexcept;
+
+	      raw_pp_token_index raw_pp_tokens_begin;
+	      rescan_macro_invocation::output::tokens_range invocation_range;
+	    };
+
+	  private:
+	    using _segments_container_type = std::vector<segment>;
+
+	  public:
+	    class const_segment_iterator
+	    {
+	    public:
+	      using iterator_category = std::bidirectional_iterator_tag;
+
+	      using value_type = segment;
+	      using reference = value_type;
+
+	      const_segment_iterator() noexcept;
+
+	      bool operator==(const const_segment_iterator &rhs)
+		const noexcept;
+
+	      bool operator!=(const const_segment_iterator &rhs) const noexcept
+	      { return !(*this == rhs); }
+
+	      reference operator*() const noexcept;
+
+	      const_segment_iterator& operator++() noexcept;
+	      const_segment_iterator operator++(int) noexcept;
+
+	      const_segment_iterator& operator--() noexcept;
+	      const_segment_iterator operator--(int) noexcept;
+
+	    private:
+	      friend class invocation_source;
+
+	      const_segment_iterator
+		(const _segments_container_type::const_iterator it_seg,
+		 const rescan_macro_invocation::output::tokens_range
+		   invocation_range) noexcept;
+
+	      _segments_container_type::const_iterator _it_seg;
+	      rescan_macro_invocation::output::tokens_range
+		_invocation_range;
+	    }; // class const_segment_iterator
+
+	    const_segment_iterator segments_begin() const noexcept;
+	    const_segment_iterator segments_end() const noexcept;
+
+	    std::pair<const_segment_iterator, const_segment_iterator>
+	    overlapping_segments
+	      (const rescan_macro_invocation::output::tokens_range &range)
+	      const noexcept;
+
+	    const raw_pp_tokens_range get_total_spanned_source_range()
+	      const noexcept;
+
+	  private:
+	    friend class expansion_forest;
+	    friend class preprocessor;
+
+	    void _append_raw_pp_token(const raw_pp_token_index raw_tok_index);
+
+	    const rescan_macro_invocation::output::tokens_range
+	    _get_total_invocation_range() const noexcept;
+
+	    _segments_container_type _segments;
+	  }; // class invocation_source
+
+	  expansion_forest
+	    (const macro &m,
+	     expansion_forest::invocation_source &&initial_invocation_source);
 
 	  const rescan_macro_invocation
 	  operator[](const nodes_size_type node_index) const noexcept;
 
 	  const rescan_subtree get_main_tree() const noexcept;
 
+	  const invocation_source& get_invocation_source() const noexcept
+	  { return _invocation_src; }
+
 	private:
 	  friend class preprocessor;
 
 	  _forest_nodes _forest;
+	  invocation_source _invocation_src;
 	}; // class expansion_forest
 
       private:
@@ -1432,14 +1515,13 @@ namespace klp
 	typedef std::vector<passed_through_arg_token>
 		passed_through_arg_tokens_type;
 
-	const raw_pp_tokens_range& get_source_range() const noexcept
-	{ return _invocation_range; }
+	const raw_pp_tokens_range get_source_range() const noexcept;
 
 	const pp_tokens_range get_output_range(const pp_result &pp_result)
 	  const noexcept;
 
 	bool operator<(const raw_pp_tokens_range &r) const noexcept
-	{ return _invocation_range < r; }
+	{ return get_source_range() < r; }
 
 	const used_macros& get_used_macros() const noexcept
 	{ return _used_macros; }
@@ -1456,9 +1538,9 @@ namespace klp
 	friend class pp_result;
 	friend class preprocessor;
 
-	macro_invocation(const macro &m,
-			 const raw_pp_tokens_range &invocation_range,
-			 const std::size_t src_length);
+	macro_invocation
+	  (const macro &m,
+	   expansion_forest::invocation_source &&initial_invocation_source);
 
 	void _add_passed_through_macro_arg_token
 			(const raw_pp_token_index arg_tok_raw,
@@ -1466,7 +1548,6 @@ namespace klp
 	void _add_non_passthrough_macro_arg_token
 			(const raw_pp_token_index arg_tok_raw);
 
-	raw_pp_tokens_range _invocation_range;
 	used_macros _used_macros;
 	macro_nondef_constraints _macro_nondef_constraints;
 	passed_through_arg_tokens_type _passed_through_arg_tokens;
@@ -2483,12 +2564,10 @@ namespace klp
 			    const macro_undef::predefined_user_tag &tag);
 
       macro_invocation&
-      _add_macro_invocation(const macro &m,
-			    const raw_pp_tokens_range &invocation_range,
-			    const std::size_t src_length);
-
-      void _extend_macro_invocation_range(macro_invocation &invocation,
-					  const raw_pp_token_index new_end);
+      _add_macro_invocation
+	(const macro &m,
+	 macro_invocation::expansion_forest::invocation_source
+	   &&initial_invocation_source);
 
       std::pair<used_macros, macro_nondef_constraints>
       _drop_pp_tokens_tail(const pp_tokens::size_type new_end);
