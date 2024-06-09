@@ -1158,11 +1158,20 @@ preprocessor::_try_expand_raw
       if (t.next_arg != t.args.size()) {
 	// Add a dummy ID macro expansion spanning the argument's
 	// unexpanded tokens and expand it recursively.
+	// The source range is relative to the owner parent's output,
+	// that is, it is relative to the same anchor as for the owner.
+	const auto arg_src_range_begin
+	  = forest_nodes[t.node]._src_range.begin + t.args_offsets[t.next_arg];
 	const expansion_forest_nodes::size_type arg_root_node =
-	  forest_nodes.add_macro_arg_tree(t.node,
-					  (forest_nodes[t.node].src_begin() +
-					   t.args_offsets[t.next_arg]),
-					  t.args[t.next_arg].size());
+	  forest_nodes.add_macro_arg_tree
+	  (t.node,
+	   _macro_expansion_forest::_rescan_macro_invocation{
+	     _macro_expansion_forest::rescan_macro_invocation::output::
+	       tokens_range{
+	       arg_src_range_begin,
+	       arg_src_range_begin + t.args[t.next_arg].size()
+	     }
+	   });
 	expansion_stack.emplace_back(arg_root_node, t.args[t.next_arg]);
 	result_stack.emplace();
 	continue;
@@ -1353,8 +1362,14 @@ preprocessor::_try_expand_raw
 	_scanned_macro_invocation smi =
 	  _read_func_macro_invocation(*m, id_tok_index, read_tok);
 	const expansion_forest_nodes::size_type node =
-	  forest_nodes.add_rescan_invocation(t.node, *m,
-					     cur_out_token_index, smi.n_tokens);
+	  forest_nodes.add_rescan_invocation
+	  (_macro_expansion_forest::_rescan_macro_invocation{
+	     t.node, *m,
+	     _macro_expansion_forest::rescan_macro_invocation::output::
+	       tokens_range{
+	       cur_out_token_index, cur_out_token_index + smi.n_tokens
+	     }
+	   });
 	expansion_stack.emplace_back(node, *m, std::move(smi.args_offsets),
 				     std::move(smi.args));
 	break;
@@ -1362,8 +1377,14 @@ preprocessor::_try_expand_raw
       } else {
 	// Object-like macro invocation.
 	const expansion_forest_nodes::size_type node =
-	  forest_nodes.add_rescan_invocation(t.node, *m,
-					     cur_out_token_index, 1);
+	  forest_nodes.add_rescan_invocation
+	  (_macro_expansion_forest::_rescan_macro_invocation{
+	     t.node, *m,
+	     _macro_expansion_forest::rescan_macro_invocation::output::
+	       tokens_range{
+	       cur_out_token_index, cur_out_token_index + 1
+	     }
+	   });
 	expansion_stack.emplace_back(node, *m);
 	break;
 

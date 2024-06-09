@@ -664,15 +664,11 @@ namespace klp
 	      const noexcept;
 
 	    size_type
-	    add_rescan_invocation(const _forest_nodes::size_type rescan_parent,
-				  const macro &m,
-				  const std::size_t src_begin,
-				  const std::size_t src_length);
+	    add_rescan_invocation(_rescan_macro_invocation &&rescan_invocation);
 
 	    size_type
 	    add_macro_arg_tree(const _forest_nodes::size_type owner,
-			       const std::size_t src_begin,
-			       const std::size_t src_length);
+			       _rescan_macro_invocation &&arg_root_node);
 
 	    const size_type first_arg_of(const size_type node)
 	      const noexcept;
@@ -1227,11 +1223,9 @@ namespace klp
 	  class _rescan_macro_invocation
 	  {
 	  public:
-	    std::size_t src_begin() const noexcept
-	    { return _src_begin; }
-
-	    std::size_t src_length() const noexcept
-	    { return _src_length; }
+	    const rescan_macro_invocation::output::tokens_range &
+	    get_source_range() const noexcept
+	    { return _src_range; }
 
 	    std::size_t out_length() const noexcept;
 
@@ -1251,13 +1245,14 @@ namespace klp
 	    friend class preprocessor;
 
 	    _rescan_macro_invocation
-			(const _forest_nodes::size_type rescan_parent,
-			 const macro &m,
-			 const std::size_t src_begin,
-			 const std::size_t src_length);
+		(const _forest_nodes::size_type rescan_parent,
+		 const macro &m,
+		 const rescan_macro_invocation::output::tokens_range &src_range)
+	      noexcept;
 
-	    _rescan_macro_invocation(const std::size_t src_begin,
-				     const std::size_t src_length);
+	    _rescan_macro_invocation
+		(const rescan_macro_invocation::output::tokens_range &src_range)
+	      noexcept;
 
 	    _forest_nodes::size_type _rescan_parent;
 	    std::size_t _nargs;
@@ -1267,8 +1262,7 @@ namespace klp
 	    // For argument nodes, relative to the owner's _parent's
 	    // output begin, if any, otherwise relative to the outer
 	    // invocation_source.
-	    std::size_t _src_begin;
-	    std::size_t _src_length;
+	    rescan_macro_invocation::output::tokens_range _src_range;
 
 	    const macro *_m;
 

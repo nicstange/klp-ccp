@@ -449,7 +449,13 @@ _forest_nodes(const macro &m,
 	      const std::size_t initial_src_length)
 {
   // Add initial root node.
-  add_rescan_invocation(size_type::invalid(), m, 0, initial_src_length);
+  add_rescan_invocation
+    (_rescan_macro_invocation{
+       size_type::invalid(), m,
+       rescan_macro_invocation::output::tokens_range{
+	 0, initial_src_length
+       }
+     });
 }
 
 expansion_forest::_rescan_macro_invocation&
@@ -469,33 +475,29 @@ expansion_forest::_forest_nodes::operator[](const size_type n)
 
 
 expansion_forest::_forest_nodes::size_type expansion_forest::_forest_nodes::
-add_rescan_invocation(const _forest_nodes::size_type rescan_parent,
-		      const macro &m,
-		      const std::size_t src_begin,
-		      const std::size_t src_length)
+add_rescan_invocation(_rescan_macro_invocation &&rescan_invocation)
 {
   assert(_nodes.empty() ||
-	 (rescan_parent != size_type::invalid() &&
-	  rescan_parent._n < _nodes.size()));
+	 (rescan_invocation._rescan_parent != size_type::invalid() &&
+	  rescan_invocation._rescan_parent._n < _nodes.size()));
   assert(_nodes.empty() ||
-	 (*this)[rescan_parent].out_length() > src_begin);
-  _nodes.emplace_back(_rescan_macro_invocation{
-      rescan_parent, m, src_begin, src_length
-    });
+	 ((*this)[rescan_invocation._rescan_parent].out_length() >
+	  rescan_invocation._src_range.begin));
+  _nodes.emplace_back(std::move(rescan_invocation));
+
   return size_type{_nodes.size() - 1};
 }
 
 expansion_forest::_forest_nodes::size_type expansion_forest::_forest_nodes::
 add_macro_arg_tree(const _forest_nodes::size_type owner,
-		   const std::size_t src_begin,
-		   const std::size_t src_length)
+		   _rescan_macro_invocation &&arg_root_node)
 {
+  assert(arg_root_node.is_arg_tree_root());
   assert(owner != size_type::invalid() && owner._n < _nodes.size());
-  assert((*this)[owner].src_begin() <= src_begin);
-  assert((*this)[owner].src_begin() + (*this)[owner].src_length() >=
-	 src_begin + src_length);
+  assert((*this)[owner]._src_range.begin <= arg_root_node._src_range.begin);
+  assert((*this)[owner]._src_range.end >= arg_root_node._src_range.end);
   assert(!(*this)[owner].out_length());
-  _nodes.emplace_back(_rescan_macro_invocation{src_begin, src_length});
+  _nodes.emplace_back(std::move(arg_root_node));
   ++(*this)[owner]._nargs;
   return size_type{_nodes.size() - 1};
 }
@@ -709,16 +711,15 @@ _rescan_subtree_end(const size_type subtree_root) const noexcept
 expansion_forest::_rescan_macro_invocation::
 _rescan_macro_invocation
 (const _forest_nodes::size_type rescan_parent, const macro &m,
- const std::size_t src_begin, const std::size_t src_length)
-  : _rescan_parent(rescan_parent), _nargs(0),
-    _src_begin(src_begin), _src_length(src_length), _m(&m)
+ const rescan_macro_invocation::output::tokens_range &src_range) noexcept
+  : _rescan_parent{rescan_parent}, _nargs{0}, _src_range{src_range}, _m(&m)
 {}
 
 expansion_forest::_rescan_macro_invocation::
-_rescan_macro_invocation(const std::size_t src_begin,
-			 const std::size_t src_length)
+_rescan_macro_invocation
+  (const rescan_macro_invocation::output::tokens_range &src_range) noexcept
   : _rescan_parent(_forest_nodes::size_type::invalid()), _nargs(0),
-    _src_begin(src_begin), _src_length(src_length), _m(nullptr)
+    _src_range(src_range), _m(nullptr)
 {}
 
 std::size_t expansion_forest::_rescan_macro_invocation::out_length()
@@ -726,7 +727,7 @@ std::size_t expansion_forest::_rescan_macro_invocation::out_length()
 {
   // The roots for argument expansions are dummy identity mappings.
   if (is_arg_tree_root())
-    return _src_length;
+    return _src_range.length();
 
   return _output.out_length();
 }
@@ -962,8 +963,12 @@ const_src_iterator(const _rescan_macro_invocation_ref &node,
     _node{!node.deref().is_arg_tree_root() ?
 	  node.deref().get_rescan_parent() :
 	  node.get_node()},
-    _remaining_src_length{node.deref().src_length()},
-    _src_begin{!node.deref().is_arg_tree_root() ? node.deref().src_begin() : 0}
+    _remaining_src_length{node.deref().get_source_range().length()},
+    _src_begin{
+      (!node.deref().is_arg_tree_root() ?
+       node.deref().get_source_range().begin :
+       0)
+    }
 {
   _advance_node_to_emitting();
 }
@@ -1053,12 +1058,12 @@ _advance_node_to_emitting() noexcept
 	break;
 
       _src_begin -= node.out_length();
-      _src_begin += node.src_begin() + node.src_length();
+      _src_begin += node.get_source_range().end;
       _node = node.get_rescan_parent();
     } else {
       // The offset of the (unexpanded) argument's beginning is relative
       // to the owner's rescan parent's output.
-      _src_begin += node.src_begin();
+      _src_begin += node.get_source_range().begin;
       _node = _forest->arg_owner(_node);
       _node = (*_forest)[_node].get_rescan_parent();
     }
@@ -1795,7 +1800,7 @@ expansion_forest::rescan_subtree::const_final_out_iterator::operator++()
   while(((*_forest)[_stack_top_node].out_length() ==
 	 _consumed_out_lengths_stack.top())) {
     const _rescan_macro_invocation &child = (*_forest)[_stack_top_node];
-    accumulated_src_length += child.src_length();
+    accumulated_src_length += child.get_source_range().length();
     _consumed_out_lengths_stack.pop();
     _stack_top_node = child.get_rescan_parent();
     assert(_consumed_out_lengths_stack.empty() ==
@@ -1829,7 +1834,7 @@ _cur_out_segment_length() const noexcept
       (*_forest)[_next_dfs_pre_node].get_rescan_parent() != _stack_top_node) {
     out_segment_end = (*_forest)[_stack_top_node].out_length();
   } else {
-    out_segment_end = (*_forest)[_next_dfs_pre_node].src_begin();
+    out_segment_end = (*_forest)[_next_dfs_pre_node].get_source_range().begin;
   }
 
   assert(out_segment_end > _consumed_out_lengths_stack.top()
@@ -1844,7 +1849,7 @@ _enter_branch_at_pos()
     const _rescan_macro_invocation &next = (*_forest)[_next_dfs_pre_node];
 
     if (next.get_rescan_parent() != _stack_top_node ||
-	next.src_begin() != _consumed_out_lengths_stack.top()) {
+	next.get_source_range().begin != _consumed_out_lengths_stack.top()) {
       break;
     }
 
@@ -1911,17 +1916,17 @@ std::size_t expansion_forest::rescan_subtree::total_src_length() const
     const _rescan_macro_invocation &child = forest[rightmost];
     const _forest_nodes::size_type parent = child.get_rescan_parent();
     assert(parent != _forest_nodes::size_type::invalid());
-    assert(child.src_begin() < forest[parent].out_length());
+    assert(child.get_source_range().begin < forest[parent].out_length());
 
-    total_src_length += child.src_length();
+    total_src_length += child.get_source_range().length();
     total_src_length -=
       std::min(total_src_length,
-	       forest[parent].out_length() - child.src_begin());
+	       forest[parent].out_length() - child.get_source_range().begin);
 
     rightmost = parent;
   }
 
-  total_src_length += forest[rightmost].src_length();
+  total_src_length += forest[rightmost].get_source_range().length();
 
   return total_src_length;
 }
@@ -1934,8 +1939,8 @@ std::size_t expansion_forest::rescan_subtree::total_out_length() const
   for (auto node = subtree_root;
        node != _forest_nodes::size_type::invalid();
        node = forest.next_rescan_subtree_dfs_pre_node(subtree_root, node)) {
-    auto src_begin = forest[node].src_begin();
-    auto remaining_src_len = forest[node].src_length();
+    auto src_begin = forest[node].get_source_range().begin;
+    auto remaining_src_len = forest[node].get_source_range().length();
     auto ancestor_node = node;
     while (remaining_src_len != 0 && ancestor_node != subtree_root) {
       ancestor_node = forest[ancestor_node].get_rescan_parent();
@@ -1949,7 +1954,7 @@ std::size_t expansion_forest::rescan_subtree::total_out_length() const
       }
       assert(src_begin >= ancestor.out_length() || remaining_src_len == 0);
       src_begin -= ancestor.out_length();
-      src_begin += ancestor.src_begin() + ancestor.src_length();
+      src_begin += ancestor.get_source_range().end;
     }
     total_out_length += forest[node].out_length();
   }
