@@ -1146,11 +1146,10 @@ preprocessor::_try_expand_raw
 	// Don't expand the arguent to the defined() operator.
 	t.next_arg = t.args.size();
       }
-      while (t.next_arg != t.args.size() && !t.m->shall_expand_arg(t.next_arg))
-	++t.next_arg;
-      if (t.next_arg != t.args.size()) {
+      bool entered_arg_expansion = false;
+      while (t.next_arg != t.args.size()) {
 	// Add a dummy ID macro expansion spanning the argument's
-	// unexpanded tokens and expand it recursively.
+	// unexpanded tokens and expand it recursively, if needed.
 	// The source range is relative to the owner parent's output,
 	// that is, it is relative to the same anchor as for the owner.
 	const auto arg_src_range_begin
@@ -1165,10 +1164,16 @@ preprocessor::_try_expand_raw
 	       arg_src_range_begin + t.args[t.next_arg].size()
 	     }
 	   });
-	expansion_stack.emplace_back(arg_root_node, t.args[t.next_arg]);
-	result_stack.emplace();
-	continue;
+	if (t.m->shall_expand_arg(t.next_arg)) {
+	  expansion_stack.emplace_back(arg_root_node, t.args[t.next_arg]);
+	  result_stack.emplace();
+	  entered_arg_expansion = true;
+	  break;
+	}
+	++t.next_arg;
       }
+      if (entered_arg_expansion)
+	continue;
 
       // All arguments have been expanded as needed, but not the macro
       // itself yet. Do it now.
