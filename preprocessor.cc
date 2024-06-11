@@ -1434,24 +1434,15 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 	  },
 	  [&](const rescan_out_fragment::arg_tag&,
 	      const rescan_out_fragment::arg_ref &arg) {
-	    id_tok_index = src_frag.range_in_fragment.begin_offset;
 	    const auto arg_expansion_tree =
 	      emitting_node.get_arg_tree(arg.get_arg_index());
-	    auto arg_out_end = arg_expansion_tree.final_out_end();
-	    auto it_arg_out = arg_expansion_tree.final_out_begin();
-	    while (true) {
-	      assert(it_arg_out != arg_out_end);
-	      const auto &arg_out_seg = *it_arg_out;
-	      const auto &arg_out_seg_range =
-		arg_out_seg.get_out_range_in_emitting_node();
-	      if (id_tok_index < arg_out_seg_range.length()) {
-		id_tok_index +=  arg_out_seg_range.begin;
-		emitting_node = arg_out_seg.get_emitting_node();
-		break;
-	      }
-	      id_tok_index -= arg_out_seg_range.length();
-	      ++it_arg_out;
-	    }
+	    auto it_arg_out_seg = arg_expansion_tree.final_out_begin();
+	    id_tok_index =
+	      it_arg_out_seg.skip_out_distance
+		(src_frag.range_in_fragment.begin);
+	    const auto &arg_out_seg = *it_arg_out_seg;
+	    id_tok_index += arg_out_seg.get_out_range_in_emitting_node().begin;
+	    emitting_node = arg_out_seg.get_emitting_node();
 	  },
 	  [](const rescan_out_fragment::stringification_tag&,
 	     const rescan_out_fragment::stringification&) {

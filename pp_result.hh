@@ -1325,6 +1325,8 @@ namespace klp
 	      const_final_out_iterator& operator++();
 	      const_final_out_iterator operator++(int);
 
+	      std::size_t skip_out_distance(const std::size_t distance);
+
 	    private:
 	      friend class rescan_subtree;
 

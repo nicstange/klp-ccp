@@ -1829,6 +1829,21 @@ expansion_forest::rescan_subtree::const_final_out_iterator::operator++()
 }
 
 std::size_t expansion_forest::rescan_subtree::const_final_out_iterator::
+skip_out_distance(const std::size_t distance)
+{
+  std::size_t skipped = 0;
+  while (_stack_top_node != _forest_nodes::size_type::invalid()) {
+    const auto cur_out_segment_length =
+      (**this).get_out_range_in_emitting_node().length();
+    if (skipped + cur_out_segment_length > distance)
+      break;
+    skipped += cur_out_segment_length;
+    ++(*this);
+  }
+  return distance - skipped;
+}
+
+std::size_t expansion_forest::rescan_subtree::const_final_out_iterator::
 _cur_out_segment_length() const noexcept
 {
   std::size_t out_segment_end;
