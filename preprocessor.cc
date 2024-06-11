@@ -442,16 +442,7 @@ pp_token_index preprocessor::_emit_pp_token(pp_result &r, _pp_token &&tok)
 {
   r._append_token
     (pp_token{tok.get_type(), tok.grab_value()});
-
   const pp_token_index tok_index = r._get_last_pp_index();
-  // Amend the macro_invocation's map of passed through raw macro
-  // argument tokens.
-  if (tok.get_macro_invocation() &&
-      tok.get_passed_through_raw_token() != _pp_token::not_passed_through) {
-    tok.get_macro_invocation()->_add_passed_through_macro_arg_token
-      (tok.get_passed_through_raw_token(), tok_index);
-  }
-
   return tok_index;
 }
 
@@ -1009,6 +1000,8 @@ pp_token_index preprocessor::read_next_token()
 	  (_pp_result->_macro_invocations.size() - 1,
 	   _pp_result->_macro_invocations,
 	   pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
+	_find_passed_through_arg_tokens(*_pp_result,
+					*_pp_result->_macro_invocations.back());
 	for (auto &&t : expansion_result.second)
 	  _expanded_tokens.emplace(std::move(t));
 	goto from_expansion;
@@ -2444,6 +2437,263 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
   }
 
   return _pp_token{tok1.get_type(), std::move(value)};
+}
+
+void preprocessor::
+_find_passed_through_arg_tokens(const pp_result &pp_result,
+				pp_result::macro_invocation &mi)
+{
+  using rescan_output_segment =
+    _macro_expansion_forest::rescan_output_segment;
+  using rescan_macro_invocation =
+    _macro_expansion_forest::rescan_macro_invocation;
+  using rescan_subtree =
+    _macro_expansion_forest::rescan_subtree;
+  using rescan_out_fragment =
+    rescan_macro_invocation::output::fragment;
+
+  const auto total_out_range = mi.get_output_range(pp_result);
+  if (total_out_range.length() == 0)
+    return;
+
+  struct forest_walk_stack_entry
+  {
+    struct final_out_it {
+      rescan_subtree::const_final_out_iterator it;
+      rescan_subtree::const_final_out_iterator end;
+      std::size_t it_out_pos;
+    };
+
+    forest_walk_stack_entry
+    (rescan_subtree::const_final_out_iterator &&it_out,
+     rescan_subtree::const_final_out_iterator &&out_end,
+     const rescan_macro_invocation::output::tokens_range &range)
+      : remaining_range{range},
+	initial_range_begin{remaining_range.begin},
+	process_final_out{true},
+	out{
+	  .final_out = {std::move(it_out), std::move(out_end), 0}
+	}
+    {
+      // Advance the output iterator to the desired position, i.e.
+      // the remaining_range.begin. The range's beginning does not necessarily
+      // align with the output segment boundary, compute the segment boundary's
+      // position to have an anchor for translating to relative positions
+      // within the output segment.
+      try {
+	out.final_out.it_out_pos =
+	  (remaining_range.begin -
+	   out.final_out.it.skip_out_distance(remaining_range.begin));
+      } catch (...) {
+	if (process_final_out)
+	  out.final_out.~final_out_it();
+	else
+	  out.plain_out.~rescan_macro_invocation();
+      }
+    }
+
+    forest_walk_stack_entry(const rescan_output_segment &out_seg)
+    : remaining_range{out_seg.get_out_range_in_emitting_node()},
+      initial_range_begin{remaining_range.begin},
+      process_final_out{false},
+      out {
+	.plain_out = out_seg.get_emitting_node()
+      }
+    {}
+
+    forest_walk_stack_entry(forest_walk_stack_entry &&e) noexcept
+      : remaining_range{e.remaining_range},
+	initial_range_begin{e.initial_range_begin},
+	process_final_out(e.process_final_out),
+	out{ ._uninit = nullptr }
+    {
+      if (process_final_out) {
+	out.final_out = std::move(e.out.final_out);
+      } else {
+	out.plain_out = std::move(e.out.plain_out);
+      }
+    }
+
+    ~forest_walk_stack_entry() noexcept
+    {
+      if (process_final_out)
+	out.final_out.~final_out_it();
+      else
+	out.plain_out.~rescan_macro_invocation();
+    }
+
+    void advance_to_next_out_seg()
+    {
+      if (process_final_out) {
+	++out.final_out.it;
+	out.final_out.it_out_pos = remaining_range.begin;
+	assert(remaining_range.length() == 0 || out.final_out.it !=
+	       out.final_out.end);
+      } else {
+	assert(0);
+      }
+    }
+
+    rescan_output_segment get_cur_out_seg() const noexcept {
+      if (process_final_out) {
+	assert(out.final_out.it != out.final_out.end);
+	// Translate the remaining range from the full initial or
+	// current argument's rescan_subtree final out range to a range
+	// relative to the current emitting node's output and crop the
+	// cur_out_seg to that.
+	return (*out.final_out.it).crop_relative
+	  (rescan_macro_invocation::output::tokens_range{
+	    remaining_range.begin - out.final_out.it_out_pos,
+	    remaining_range.end - out.final_out.it_out_pos
+	  });
+      } else {
+	return
+	  (static_cast<rescan_output_segment>(out.plain_out)
+	   .crop(remaining_range));
+      }
+    }
+
+    rescan_macro_invocation::output::tokens_range remaining_range;
+    std::size_t initial_range_begin;
+    bool process_final_out;
+    union out {
+      ~out() noexcept
+      {}
+
+      void *_uninit;
+      final_out_it final_out;
+      rescan_macro_invocation plain_out;
+    } out;
+  };
+
+  std::vector<forest_walk_stack_entry> walk_stack;
+  {
+    const auto &entry_tree = mi.get_expansion_forest().get_main_tree();
+    walk_stack.emplace_back(entry_tree.final_out_begin(),
+			    entry_tree.final_out_end(),
+			    rescan_macro_invocation::output::tokens_range{
+			      0, total_out_range.length()
+			    });
+  }
+
+  while (!walk_stack.empty()) {
+    auto &t = walk_stack.back();
+    bool recursed = false;
+    while (!recursed && t.remaining_range.length() != 0) {
+      const auto cur_out_seg = t.get_cur_out_seg();
+      // If all done in the current output segment, advance to the next.
+      if (cur_out_seg.get_out_range_in_emitting_node().length() == 0) {
+	t.advance_to_next_out_seg();
+	continue;
+      }
+
+      if (cur_out_seg.get_emitting_node().is_arg_tree_root()) {
+	// We are in some macro argument expansion final output
+	// segment which didn't undergo any macro expansion during the
+	// argument expansion phase, i.e. it came directly from the
+	// the argument's source tokens. It needs to be determined
+	// where these came from -- either from some other (rescanned)
+	// macro expansion (of the arg owner's rescan tree ancestors),
+	// or directly from the input file.
+	auto it_src = cur_out_seg.get_emitting_node().src_begin();
+	auto offset_in_src_segment =
+	  it_src.skip_src_distance
+	    (cur_out_seg.get_out_range_in_emitting_node().begin);
+	auto remaining_src_length =
+	  cur_out_seg.get_out_range_in_emitting_node().length();
+	while (remaining_src_length != 0) {
+	  assert(it_src != cur_out_seg.get_emitting_node().src_end());
+	  auto cur_src_seg =
+	    ((*it_src).crop_relative
+	     (rescan_macro_invocation::output::tokens_range{
+	       offset_in_src_segment,
+	       offset_in_src_segment + remaining_src_length
+	      }));
+	  offset_in_src_segment = 0;
+
+	  if (cur_src_seg.get_emitting_node().is_nil_node()) {
+	    // Found a passed-through sequence of input tokens read directly
+	    // from file.
+	    auto out_tok_index = total_out_range.begin;
+	    for (const auto &e : walk_stack)
+	      out_tok_index += e.remaining_range.begin - e.initial_range_begin;
+	    auto invocation_src_segments =
+	      mi.get_expansion_forest()
+		.get_invocation_source().overlapping_segments
+		  (cur_src_seg.get_out_range_in_emitting_node());
+	    while (invocation_src_segments.first !=
+		   invocation_src_segments.second) {
+	      const auto &invocation_src_segment =
+		*invocation_src_segments.first;
+	      auto raw_tok_index = invocation_src_segment.raw_pp_tokens_begin;
+	      auto remaining = invocation_src_segment.invocation_range.length();
+	      while (remaining != 0) {
+		mi._add_passed_through_macro_arg_token(raw_tok_index,
+						       out_tok_index);
+		++out_tok_index;
+		++raw_tok_index;
+		--remaining;
+	      }
+	      ++invocation_src_segments.first;
+	    }
+
+	    const auto cur_src_seg_length =
+	      cur_src_seg.get_out_range_in_emitting_node().length();
+	    t.remaining_range.begin += cur_src_seg_length;
+	    remaining_src_length -= cur_src_seg_length;
+	    ++it_src;
+	  } else {
+	    // The current src segment is from the output of a
+	    // rescanned macro expansion and comes from one of the
+	    // argument owner's rescan tree ancestors. Push the range
+	    // to have it walked for argument expansions, which might
+	    // in turn get matched to raw tokens from the input file.
+	    const auto emitting_tree =
+	      static_cast<rescan_subtree>(cur_src_seg.get_emitting_node());
+	    walk_stack.emplace_back(cur_src_seg);
+	    recursed = true;
+	    break;
+	  }
+	}
+      } else {
+	auto frags = cur_out_seg.fragments();
+	while (frags.first != frags.second) {
+	  const auto &frag = *frags.first;
+	  frag.fragment
+	    (wrap_callables<default_action_nop>
+	     ([&](const rescan_out_fragment::arg_tag&,
+		  const rescan_out_fragment::arg_ref &arg) {
+	       if (frag.range_in_fragment.length() == 0) {
+		 return;
+	       }
+	       const auto arg_expansion_tree =
+		 (cur_out_seg.get_emitting_node()
+		 .get_arg_tree(arg.get_arg_index()));
+	       walk_stack.emplace_back
+		 (arg_expansion_tree.final_out_begin(),
+		  arg_expansion_tree.final_out_end(),
+		  frag.range_in_fragment);
+	       recursed = true;
+	     }));
+	  if (recursed)
+	    break;
+
+	  t.remaining_range.begin += frag.range_in_fragment.length();
+	  ++frags.first;
+	}
+      }
+    }
+
+    if (!recursed) {
+      assert(t.remaining_range.length() == 0);
+      const auto advanced_out_length =
+	t.remaining_range.end - t.initial_range_begin;
+      walk_stack.pop_back();
+      if (!walk_stack.empty()) {
+	walk_stack.back().remaining_range.begin += advanced_out_length;
+      }
+    }
+  }
 }
 
 void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
