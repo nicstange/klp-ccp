@@ -773,6 +773,9 @@ namespace klp
 	      const_src_iterator& operator++() noexcept;
 	      const_src_iterator operator++(int) noexcept;
 
+	      std::size_t skip_src_distance(const std::size_t distance)
+		noexcept;
+
 	    private:
 	      friend class rescan_macro_invocation;
 

@@ -1478,21 +1478,11 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 	  }));
 
     } else {
-      const auto arg_src_end = emitting_node.src_end();
-      auto it_arg_src = emitting_node.src_begin();
-      while (true) {
-	assert(it_arg_src != arg_src_end);
-	const auto &arg_src_seg = *it_arg_src;
-	const auto &arg_src_seg_range =
-	  arg_src_seg.get_out_range_in_emitting_node();
-	if (id_tok_index < arg_src_seg_range.length()) {
-	  id_tok_index +=  arg_src_seg_range.begin;
-	  emitting_node = arg_src_seg.get_emitting_node();
-	  break;
-	}
-	id_tok_index -= arg_src_seg_range.length();
-	++it_arg_src;
-      }
+      auto it_arg_src_seg = emitting_node.src_begin();
+      id_tok_index = it_arg_src_seg.skip_src_distance(id_tok_index);
+      const auto &arg_src_seg = *it_arg_src_seg;
+      id_tok_index += arg_src_seg.get_out_range_in_emitting_node().begin;
+      emitting_node = arg_src_seg.get_emitting_node();
     }
   }
 

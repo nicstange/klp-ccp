@@ -1048,6 +1048,21 @@ operator++(int) noexcept
   return i;
 }
 
+std::size_t expansion_forest::rescan_macro_invocation::const_src_iterator::
+skip_src_distance(const std::size_t distance) noexcept
+{
+  std::size_t skipped = 0;
+  while (_node != _forest_nodes::size_type::invalid()) {
+    const auto cur_src_segment_length =
+      (**this).get_out_range_in_emitting_node().length();
+    if (skipped + cur_src_segment_length > distance)
+      break;
+    skipped += cur_src_segment_length;
+    ++(*this);
+  }
+  return distance - skipped;
+}
+
 void expansion_forest::rescan_macro_invocation::const_src_iterator::
 _advance_node_to_emitting() noexcept
 {
