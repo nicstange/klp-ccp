@@ -952,13 +952,6 @@ namespace klp
 		  std::vector<component> _components;
 		}; // class concat_sequence
 
-		class out_tokens_range_in_fragment
-		{
-		public:
-		  std::size_t begin_offset;
-		  std::size_t end_offset;
-		};
-
 		fragment(fragment &&seg);
 
 		~fragment() noexcept;
@@ -1146,7 +1139,8 @@ namespace klp
 	      struct value_type
 	      {
 		const fragment &fragment;
-		const fragment::out_tokens_range_in_fragment range_in_fragment;
+		// Relative to the fragment output's beginning.
+		rescan_macro_invocation::output::tokens_range range_in_fragment;
 	      };
 
 	      using reference = value_type;

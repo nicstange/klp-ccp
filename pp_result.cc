@@ -907,11 +907,11 @@ expansion_forest::rescan_output_segment::const_fragment_iterator::operator*()
   assert(_it_frag != _seg->_emitting_node.deref()._output._fragments.end());
 
   const auto frag_out_range = _it_frag->get_out_range();
-  const  rescan_macro_invocation_output_range overlapping_out_range{
+  const rescan_macro_invocation_output_range overlapping_out_range{
     std::max(_seg->_range_in_emitting_node.begin, frag_out_range.begin),
     std::min(_seg->_range_in_emitting_node.end, frag_out_range.end)
   };
-  const fragment::out_tokens_range_in_fragment range_in_frag{
+  const rescan_macro_invocation_output_range range_in_frag{
     overlapping_out_range.begin - frag_out_range.begin,
     overlapping_out_range.end - frag_out_range.begin,
   };
