@@ -811,6 +811,22 @@ const expansion_forest::rescan_subtree expansion_forest::get_main_tree()
   };
 }
 
+expansion_forest::const_all_nodes_iterator
+expansion_forest::all_nodes_begin() const noexcept
+{
+  return const_all_nodes_iterator{
+    _forest, const_all_nodes_iterator::begin_tag{}
+  };
+}
+
+expansion_forest::const_all_nodes_iterator
+expansion_forest::all_nodes_end() const noexcept
+{
+  return const_all_nodes_iterator{
+    _forest, const_all_nodes_iterator::end_tag{}
+  };
+}
+
 
 expansion_forest::rescan_output_segment::rescan_output_segment
   (const _rescan_macro_invocation_ref &emitting_node,
@@ -2141,6 +2157,74 @@ _get_total_invocation_range() const noexcept
   };
 }
 
+
+expansion_forest::const_all_nodes_iterator::
+const_all_nodes_iterator() noexcept
+  : _forest{nullptr},
+    _node_index{
+      std::numeric_limits<_forest_nodes::_container_type::size_type>::max()
+    }
+{}
+
+expansion_forest::const_all_nodes_iterator::
+const_all_nodes_iterator(const _forest_nodes &forest,
+			 const begin_tag&) noexcept
+  : _forest{&forest}, _node_index{0}
+{}
+
+expansion_forest::const_all_nodes_iterator::
+const_all_nodes_iterator(const _forest_nodes &forest,
+			 const end_tag&) noexcept
+  : _forest{&forest}, _node_index{forest._nodes.size()}
+{}
+
+bool expansion_forest::const_all_nodes_iterator::
+operator==(const const_all_nodes_iterator &rhs)
+  const noexcept
+{
+  assert(_forest == rhs._forest);
+  return _node_index == rhs._node_index;
+}
+
+expansion_forest::const_all_nodes_iterator::reference
+expansion_forest::const_all_nodes_iterator::operator*() const noexcept
+{
+  return rescan_macro_invocation{
+    _rescan_macro_invocation_ref{
+      *_forest, _forest_nodes::size_type{_node_index}
+    }
+  };
+}
+
+expansion_forest::const_all_nodes_iterator&
+expansion_forest::const_all_nodes_iterator::operator++() noexcept
+{
+  ++_node_index;
+  return *this;
+}
+
+expansion_forest::const_all_nodes_iterator
+expansion_forest::const_all_nodes_iterator::operator++(int) noexcept
+{
+  const auto it = *this;
+  ++_node_index;
+  return it;
+}
+
+expansion_forest::const_all_nodes_iterator&
+expansion_forest::const_all_nodes_iterator::operator--() noexcept
+{
+  --_node_index;
+  return *this;
+}
+
+expansion_forest::const_all_nodes_iterator
+expansion_forest::const_all_nodes_iterator::operator--(int) noexcept
+{
+  const auto it = *this;
+  --_node_index;
+  return it;
+}
 
 
 pp_result::_pp_tokens_origins::_pp_tokens_origins() noexcept = default;

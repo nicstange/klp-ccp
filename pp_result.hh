@@ -612,11 +612,10 @@ namespace klp
 	  //     sequence.
 	  class _forest_nodes
 	  {
-	  private:
+	  public:
 	    typedef std::vector<_rescan_macro_invocation> _container_type;
 	    _container_type _nodes;
 
-	  public:
 	    class size_type
 	    {
 	    public:
@@ -1373,6 +1372,46 @@ namespace klp
 	    _rescan_macro_invocation_ref _subtree_root;
 	  }; // class rescan_subtree
 
+	  class const_all_nodes_iterator
+	  {
+	  public:
+	    using iterator_category = std::bidirectional_iterator_tag;
+
+	    using value_type = rescan_macro_invocation;
+	    using reference = value_type;
+
+	    const_all_nodes_iterator() noexcept;
+
+	    bool operator==(const const_all_nodes_iterator &rhs)
+	      const noexcept;
+
+	    bool operator!=(const const_all_nodes_iterator &rhs) const noexcept
+	    { return !(*this == rhs); }
+
+	    reference operator*() const noexcept;
+
+	    const_all_nodes_iterator& operator++() noexcept;
+	    const_all_nodes_iterator operator++(int) noexcept;
+
+	    const_all_nodes_iterator& operator--() noexcept;
+	    const_all_nodes_iterator operator--(int) noexcept;
+
+	  private:
+	    friend class expansion_forest;
+
+	    struct begin_tag{};
+	    struct end_tag{};
+
+	    const_all_nodes_iterator(const _forest_nodes &forest,
+				     const begin_tag&) noexcept;
+
+	    const_all_nodes_iterator(const _forest_nodes &forest,
+				     const end_tag&) noexcept;
+
+	    const _forest_nodes *_forest;
+	    _forest_nodes::_container_type::size_type _node_index;
+	  }; // class const_all_nodes_iterator
+
 	  class invocation_source
 	  {
 	  public:
@@ -1408,6 +1447,7 @@ namespace klp
 
 	      const_segment_iterator& operator++() noexcept;
 	      const_segment_iterator operator++(int) noexcept;
+
 
 	      const_segment_iterator& operator--() noexcept;
 	      const_segment_iterator operator--(int) noexcept;
@@ -1456,6 +1496,9 @@ namespace klp
 	  operator[](const nodes_size_type node_index) const noexcept;
 
 	  const rescan_subtree get_main_tree() const noexcept;
+
+	  const_all_nodes_iterator all_nodes_begin() const noexcept;
+	  const_all_nodes_iterator all_nodes_end() const noexcept;
 
 	  const invocation_source& get_invocation_source() const noexcept
 	  { return _invocation_src; }
