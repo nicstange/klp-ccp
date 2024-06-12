@@ -891,6 +891,10 @@ namespace klp
 
 		class stringification
 		{
+		public:
+		  const arg_ref& get_arg() const noexcept
+		  { return _arg; }
+
 		private:
 		  friend class fragment;
 		  friend class _concat_builder;
@@ -913,6 +917,11 @@ namespace klp
 		      stringification,
 		      conditional_comma,
 		    };
+
+		  public:
+		    template<typename callable_type>
+		    auto operator()(callable_type &&c) const ->
+		      decltype(c(std::declval<repl_tag>()));
 
 		  private:
 		    friend class _concat_builder;
@@ -939,9 +948,21 @@ namespace klp
 		    };
 		  }; // class component
 
+
+		private:
+		  using _components_container_type = std::vector<component>;
+
+		public:
 		  concat_sequence(const concat_sequence&) = delete;
 
 		  concat_sequence(concat_sequence&&) = default;
+
+		  const _components_container_type::size_type
+		  size() const noexcept;
+
+		  const component&
+		  operator[](const _components_container_type::size_type i)
+		    const noexcept;
 
 		private:
 		  friend class fragment;
@@ -951,7 +972,7 @@ namespace klp
 
 		  void _extend(component &&c);
 
-		  std::vector<component> _components;
+		  _components_container_type _components;
 		}; // class concat_sequence
 
 		fragment(fragment &&seg);

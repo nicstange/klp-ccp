@@ -1286,6 +1286,23 @@ component::component(repl_ref &&repl, const bool skipped,
 {}
 
 
+const expansion_forest::rescan_macro_invocation::output::fragment::
+  concat_sequence::_components_container_type::size_type
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+size() const noexcept
+{
+  return _components.size();
+}
+
+const expansion_forest::rescan_macro_invocation::output::fragment::
+  concat_sequence::component&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+operator[](const _components_container_type::size_type i)
+  const noexcept
+{
+  return _components[i];
+}
+
 void
 expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
 _extend(component &&c)
