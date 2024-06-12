@@ -1002,6 +1002,8 @@ pp_token_index preprocessor::read_next_token()
 	   pp_result::_pp_tokens_origins::from_macro_expansion_tag{});
 	_find_passed_through_arg_tokens(*_pp_result,
 					*_pp_result->_macro_invocations.back());
+	_find_non_passed_through_arg_tokens
+	  (*_pp_result, *_pp_result->_macro_invocations.back());
 	for (auto &&t : expansion_result.second)
 	  _expanded_tokens.emplace(std::move(t));
 	goto from_expansion;
@@ -1905,18 +1907,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
   auto &&stringify =
     [&](const raw_pp_tokens::size_type arg_index) {
       assert(arg_index != no_arg_index);
-      // Mark macro argument tokens participating in stringifications
-      // as non-passthrough.
-      const _pp_tokens &arg = args[arg_index];
-      for (auto &&it_tok = arg.begin(); it_tok != arg.end(); ++it_tok) {
-	if (it_tok->get_passed_through_raw_token() !=
-	    _pp_token::not_passed_through) {
-	  mi._add_non_passthrough_macro_arg_token
-		(it_tok->get_passed_through_raw_token());
-	}
-      }
-
-      return _stringify(arg);
+      return _stringify(args[arg_index]);
     };
 
   std::vector<_pp_token> result;
@@ -2012,15 +2003,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 					     arg.back().get_value());
 	    concat_frag.add_component(repl_pos, arg_index, arg.size(),
 				      out_fragment::arg_tag{});
-
-	    // Mark macro argument tokens participating in
-	    // concatenations as non-passthrough.
-	    if (arg.back().get_passed_through_raw_token() !=
-		_pp_token::not_passed_through) {
-		mi._add_non_passthrough_macro_arg_token
-			(arg.back().get_passed_through_raw_token());
-	    }
-
 	  }
 	} else {
 	  concat_result.set_type_and_value(repl_toks[repl_pos].get_type(),
@@ -2115,14 +2097,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    concat_frag.add_component(repl_pos, arg_index, arg.size(),
 				      out_fragment::arg_tag{});
 
-	    // Mark macro argument tokens participating in
-	    // concatenations as non-passthrough.
-	    if (arg.front().get_passed_through_raw_token() !=
-		_pp_token::not_passed_through) {
-		mi._add_non_passthrough_macro_arg_token
-			(arg.front().get_passed_through_raw_token());
-	    }
-
 	    if (arg.size() == 1)
 	      continue;
 
@@ -2143,17 +2117,6 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		   !arg.back().is_newline());
 	    concat_result.set_type_and_value(arg.back().get_type(),
 					     arg.back().get_value());
-
-	    if (next_no_ws_repl_pos != repl_toks.size() &&
-		repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
-	      // Mark macro argument tokens participating in
-	      // concatenations as non-passthrough.
-	      if (arg.front().get_passed_through_raw_token() !=
-		  _pp_token::not_passed_through) {
-		  mi._add_non_passthrough_macro_arg_token
-			(arg.front().get_passed_through_raw_token());
-	      }
-	    }
 
 	  } else {
 	    concat_result = _concat(std::move(concat_result),
@@ -2700,6 +2663,146 @@ _find_passed_through_arg_tokens(const pp_result &pp_result,
     }
   }
 }
+
+void preprocessor::
+_find_non_passed_through_arg_tokens(const pp_result &pp_result,
+				    pp_result::macro_invocation &mi)
+{
+
+  using rescan_output_segment =
+    _macro_expansion_forest::rescan_output_segment;
+  using rescan_macro_invocation =
+    _macro_expansion_forest::rescan_macro_invocation;
+  using rescan_subtree =
+    _macro_expansion_forest::rescan_subtree;
+  using rescan_out_fragment =
+    rescan_macro_invocation::output::fragment;
+
+  auto &&mark_as_non_passed
+    = [&](const rescan_output_segment &arg_seg) {
+      auto arg_tok_index = arg_seg.get_out_range_in_emitting_node().begin;
+      while (arg_tok_index != arg_seg.get_out_range_in_emitting_node().end) {
+	auto seg = (arg_seg.crop
+		    (rescan_macro_invocation::output::tokens_range{
+		      arg_tok_index, arg_tok_index + 1
+		     }));
+	while (!seg.get_emitting_node().is_nil_node()) {
+	  if (!seg.get_emitting_node().is_arg_tree_root()) {
+	    const auto &src_frag = *seg.fragments().first;
+	    if (!src_frag.fragment
+		(wrap_callables<default_action_return_value<bool, false>::type>
+		 ([&](const rescan_out_fragment::arg_tag&,
+		      const rescan_out_fragment::arg_ref &arg) {
+		   const auto arg_expansion_tree =
+		     seg.get_emitting_node().get_arg_tree(arg.get_arg_index());
+		   auto it_arg_out_seg = arg_expansion_tree.final_out_begin();
+		   const auto offset_in_arg_out_seg =
+		     it_arg_out_seg.skip_out_distance
+		       (src_frag.range_in_fragment.begin);
+		   seg = ((*it_arg_out_seg).crop_relative
+			  (rescan_macro_invocation::output::tokens_range{
+			    offset_in_arg_out_seg, offset_in_arg_out_seg + 1
+			   }));
+		   return true;
+		 }))) {
+	      break;
+	    }
+	  } else {
+	    auto it_arg_src = seg.get_emitting_node().src_begin();
+	    const auto offset_in_arg_src_seg =
+	      it_arg_src.skip_src_distance
+		(seg.get_out_range_in_emitting_node().begin);
+	    seg = ((*it_arg_src).crop_relative
+		   (rescan_macro_invocation::output::tokens_range{
+		     offset_in_arg_src_seg, offset_in_arg_src_seg + 1
+		    }));
+	  }
+	}
+	if (seg.get_emitting_node().is_nil_node()) {
+	  auto invocation_src_segments =
+	    (mi.get_expansion_forest()
+	     .get_invocation_source().overlapping_segments
+	     (seg.get_out_range_in_emitting_node()));
+	  const auto &invocation_src_segment = *invocation_src_segments.first;
+	  // We're processing one token at a time.
+	  assert(invocation_src_segment.invocation_range.length() == 1);
+	  mi._add_non_passthrough_macro_arg_token
+	    (invocation_src_segment.raw_pp_tokens_begin);
+	  assert(++invocation_src_segments.first ==
+		 invocation_src_segments.second);
+	}
+
+	++arg_tok_index;
+      }
+    };
+
+  const auto nodes_end = mi.get_expansion_forest().all_nodes_end();
+  for (auto it_node = mi.get_expansion_forest().all_nodes_begin();
+       it_node != nodes_end; ++it_node) {
+    const auto node = *it_node;
+    auto frags = static_cast<rescan_output_segment>(node).fragments();
+    while (frags.first != frags.second) {
+      (*frags.first).fragment
+	(wrap_callables<default_action_nop>
+	 ([&](const rescan_out_fragment::stringification_tag&,
+	      const rescan_out_fragment::stringification &s) {
+	   mark_as_non_passed
+	     (static_cast<rescan_output_segment>
+	      (static_cast<rescan_macro_invocation>
+	       (node.get_arg_tree(s.get_arg().get_arg_index()))));
+	 },
+	  [&](const rescan_out_fragment::concat_tag&,
+	      const rescan_out_fragment::concat_sequence &cs) {
+	    for (std::size_t i = 0; i < cs.size(); ++i) {
+	      const auto &c = cs[i];
+	      c(wrap_callables<no_default_action>
+		([&](const rescan_out_fragment::repl_tag&) {},
+		 [&](const rescan_out_fragment::arg_tag&,
+		     const rescan_out_fragment::arg_ref &arg) {
+		   // Get the unexpanded dummy root node.
+		   const auto arg_seg =
+		     (static_cast<rescan_output_segment>
+		      (static_cast<rescan_macro_invocation>
+		       (node.get_arg_tree(arg.get_arg_index()))));
+		   const auto arg_seg_range =
+		     arg_seg.get_out_range_in_emitting_node();
+		   assert(arg_seg_range.begin == 0);
+		   if (arg_seg_range.length() == 1) {
+		     mark_as_non_passed(arg_seg);
+		   } else if (arg_seg_range.length() != 0) {
+		     if (i != 0) {
+		       mark_as_non_passed
+			 (arg_seg.crop_relative
+			  (rescan_macro_invocation::output::tokens_range{
+			     0, 1
+			  }));
+		     }
+		     if (i != cs.size()) {
+		       mark_as_non_passed
+			 (arg_seg.crop_relative
+			  (rescan_macro_invocation::output::tokens_range{
+			     arg_seg_range.length() - 1,
+			     arg_seg_range.length(),
+			  }));
+		     }
+		   }
+		 },
+		 [&](const rescan_out_fragment::stringification_tag&,
+		     const rescan_out_fragment::stringification &s) {
+		   mark_as_non_passed
+		     (static_cast<rescan_output_segment>
+		      (static_cast<rescan_macro_invocation>
+		       (node.get_arg_tree(s.get_arg().get_arg_index()))));
+		 },
+		 [&](const rescan_out_fragment::conditional_comma_tag&,bool) {}
+		));
+	    }
+	  }));
+      ++frags.first;
+    }
+  }
+}
+
 
 void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 {
