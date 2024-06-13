@@ -1074,6 +1074,9 @@ namespace klp
 
 	      std::size_t out_length() const noexcept;
 
+	      const pp_tokens& get_result() const noexcept
+	      { return _result; }
+
 	    private:
 	      friend class expansion_forest;
 	      friend class preprocessor;
@@ -1114,6 +1117,7 @@ namespace klp
 	      _overlapping_fragments(const tokens_range &range) const noexcept;
 
 	      _fragments_container_type _fragments;
+	      pp_tokens _result;
 	    }; // class output
 
 

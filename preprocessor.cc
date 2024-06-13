@@ -69,9 +69,8 @@ public:
   std::vector<_pp_tokens_type>::size_type next_arg;
 
   const pp_token *out_tokens;
-  _pp_tokens_type::size_type n_out_tokens;
-  _pp_tokens_type::size_type next_out_token;
-  _pp_tokens_type _out_tokens;
+  pp_tokens::size_type n_out_tokens;
+  pp_tokens::size_type next_out_token;
 };
 
 
@@ -1064,11 +1063,12 @@ preprocessor::_try_expand_raw
       // All arguments have been expanded as needed, but not the macro
       // itself yet. Do it now.
       if (!t.out_tokens) {
-	t._out_tokens = _expand_one(forest_nodes[t.node], *mi,
-				    std::move(t.args), std::move(t.exp_args),
-				    mi->get_source_range());
-	t.out_tokens = &t._out_tokens[0];
-	t.n_out_tokens = t._out_tokens.size();
+	forest_nodes[t.node]._output._result =
+	  _expand_one(forest_nodes[t.node], *mi,
+		      std::move(t.args), std::move(t.exp_args),
+		      mi->get_source_range());
+	t.out_tokens = &forest_nodes[t.node]._output._result[0];
+	t.n_out_tokens = forest_nodes[t.node]._output._result.size();
 	assert(t.n_out_tokens == forest_nodes[t.node].out_length());
       }
 
