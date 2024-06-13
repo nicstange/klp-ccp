@@ -31,123 +31,10 @@
 
 using namespace klp::ccp;
 
-class preprocessor::_pp_token
-{
-private:
-  template <pp_token::type... types>
-  struct __is_type_any_of;
-
-public:
-  static constexpr raw_pp_token_index not_passed_through =
-    std::numeric_limits<raw_pp_token_index>::max();
-
-  _pp_token(const pp_token::type type, const std::string &value,
-	    const raw_pp_token_index passed_through_raw_token
-		    = not_passed_through);
-
-  _pp_token(const pp_token::type type, std::string &&value,
-	    const raw_pp_token_index passed_through_raw_token
-		    = not_passed_through) noexcept;
-
-  pp_token::type get_type() const noexcept
-  {
-    return _type;
-  }
-
-  const std::string& get_value() const noexcept
-  {
-    return _value;
-  }
-
-  std::string&& grab_value() noexcept
-  {
-    return std::move(_value);
-  }
-
-  void set_type_and_value(const pp_token::type type,
-			  const std::string &value);
-
-  void set_macro_invocation(pp_result::macro_invocation *mi)
-    noexcept;
-
-  pp_result::macro_invocation * get_macro_invocation()
-    const noexcept;
-
-  raw_pp_token_index get_passed_through_raw_token() const noexcept
-  { return _passed_through_raw_token; }
-
-  operator bool() const noexcept
-  {
-    return _type != pp_token::type::eof;
-  }
-
-  template <typename T>
-  bool is_punctuator(T &&s) const noexcept
-  {
-    return (_type == pp_token::type::punctuator &&
-	    _value == std::forward<T>(s));
-  }
-
-  template <pp_token::type... types>
-  bool is_type_any_of() const noexcept
-  { return __is_type_any_of<types...>()(*this); }
-
-  bool is_id() const noexcept
-  {
-    return is_type_any_of<pp_token::type::id>();
-  }
-
-  bool is_ws() const noexcept
-  {
-    return is_type_any_of<pp_token::type::ws>();
-  }
-
-  bool is_newline() const noexcept
-  {
-    return is_type_any_of<pp_token::type::newline>();
-  }
-
-  bool is_eof() const noexcept
-  {
-    return is_type_any_of<pp_token::type::eof>();
-  }
-
-  bool is_empty() const noexcept
-  {
-    return is_type_any_of<pp_token::type::empty>();
-  }
-
-  std::string stringify() const;
-
-private:
-  template <pp_token::type... types>
-  struct __is_type_any_of
-  {
-    // This is the sizeof...(types) == 0 case,
-    // c.f. the specialization below.
-    bool operator()(const _pp_token &) const noexcept
-    { return false; }
-  };
-
-  template <pp_token::type type0, pp_token::type... types>
-  struct __is_type_any_of<type0, types...>
-  {
-    bool operator()(const _pp_token &tok) const noexcept
-    {
-      return tok._type == type0 || __is_type_any_of<types...>()(tok);
-    }
-  };
-
-  pp_token::type _type;
-  std::string _value;
-  pp_result::macro_invocation * _macro_invocation;
-  raw_pp_token_index _passed_through_raw_token;
-};
-
 struct preprocessor::_scanned_macro_invocation
 {
   std::vector<std::size_t> args_offsets;
-  std::vector<std::vector<_pp_token>> args;
+  std::vector<std::vector<pp_token>> args;
 
   std::size_t n_tokens;
 };
@@ -156,7 +43,7 @@ struct preprocessor::_scanned_macro_invocation
 struct preprocessor::_macro_expansion_stack_entry
 {
 private:
-  typedef std::vector<_pp_token> _pp_tokens_type;
+  typedef std::vector<pp_token> _pp_tokens_type;
 
 public:
   _macro_expansion_stack_entry
@@ -177,11 +64,11 @@ public:
   _macro_expansion_forest::_forest_nodes::size_type node;
 
   std::vector<std::size_t> args_offsets;
-  std::vector<_pp_tokens> args;
-  std::vector<_pp_tokens> exp_args;
-  std::vector<_pp_tokens>::size_type next_arg;
+  std::vector<_pp_tokens_type> args;
+  std::vector<_pp_tokens_type> exp_args;
+  std::vector<_pp_tokens_type>::size_type next_arg;
 
-  const _pp_token *out_tokens;
+  const pp_token *out_tokens;
   _pp_tokens_type::size_type n_out_tokens;
   _pp_tokens_type::size_type next_out_token;
   _pp_tokens_type _out_tokens;
@@ -438,10 +325,9 @@ void preprocessor::_grab_remarks_from(T &from)
 }
 
 
-pp_token_index preprocessor::_emit_pp_token(pp_result &r, _pp_token &&tok)
+pp_token_index preprocessor::_emit_pp_token(pp_result &r, pp_token &&tok)
 {
-  r._append_token
-    (pp_token{tok.get_type(), tok.grab_value()});
+  r._append_token(std::move(tok));
   const pp_token_index tok_index = r._get_last_pp_index();
   return tok_index;
 }
@@ -1015,29 +901,28 @@ pp_token_index preprocessor::read_next_token()
        pp_result::_pp_tokens_origins::from_raw_tag{});
 
     return _emit_pp_token(*_pp_result,
-			  _pp_token{
+			  pp_token{
 			    raw_toks[raw_tok.first].get_type(),
 			    raw_toks[raw_tok.first].get_value(),
-			    raw_tok.first,
 			  });
 
   } else {
     return _emit_pp_token(*_pp_result,
-			  _pp_token{
+			  pp_token{
 			    pp_token::type::eof,
 			    std::string{},
 			  });
   }
 }
 
-std::pair<bool, std::vector<preprocessor::_pp_token>>
+std::pair<bool, std::vector<pp_token>>
 preprocessor::_try_expand_raw
   (const raw_pp_token_index id_tok_index,
    const std::function<std::pair<raw_pp_token_index, bool>(const _read_ctl)>
      &raw_token_reader,
    const bool from_cond_incl_cond)
 {
-  typedef std::vector<preprocessor::_pp_token> _pp_tokens_type;
+  typedef std::vector<pp_token> _pp_tokens_type;
 
   const auto &raw_tokens = _pp_result->get_raw_tokens();
   assert(raw_tokens[id_tok_index].get_type() == pp_token::type::id);
@@ -1064,9 +949,9 @@ preprocessor::_try_expand_raw
     const raw_pp_token_index raw_tok_index = next_raw_tok.first;
     if (next_raw_tok.second) {
       return (std::make_pair
-	      (_pp_token{
+	      (pp_token{
 		 pp_token::type::eof,
-		   std::string{},
+		 std::string{},
 	       },
 	       raw_pp_tokens_range{raw_tok_index, raw_tok_index}));
     }
@@ -1076,10 +961,9 @@ preprocessor::_try_expand_raw
 
     const auto &raw_tok = raw_tokens[raw_tok_index];
     return (std::make_pair
-	    (_pp_token{
+	    (pp_token{
 	      raw_tok.get_type(),
 	      raw_tok.get_value(),
-	      raw_tok_index,
 	     },
 	     raw_pp_tokens_range{raw_tok_index}));
   };
@@ -1230,7 +1114,7 @@ preprocessor::_try_expand_raw
       std::reverse_iterator <
 	  std::vector<_macro_expansion_stack_entry>::iterator
 	> it_read_stack_entry = expansion_stack.rbegin();
-      std::vector<_pp_token>::size_type peeking_token_index;
+      std::vector<pp_token>::size_type peeking_token_index;
       auto &&read_tok =
 	[&](const _read_ctl ctl, const raw_pp_tokens_range &invocation_range) {
 	  if (ctl == _read_ctl::peek) {
@@ -1248,7 +1132,7 @@ preprocessor::_try_expand_raw
 		// Don't cross over a macro argument expansion's root
 		// entry.
 		return (std::make_pair
-			(_pp_token{pp_token::type::eof, std::string{}},
+			(pp_token{pp_token::type::eof, std::string{}},
 			 invocation_range));
 	      }
 	      it_read_stack_entry = it_next;
@@ -1273,7 +1157,7 @@ preprocessor::_try_expand_raw
 		// Don't cross over a macro argument expansion's root
 		// entry.
 		return
-		  std::make_pair(_pp_token{pp_token::type::eof, std::string{}},
+		  std::make_pair(pp_token{pp_token::type::eof, std::string{}},
 				 invocation_range);
 	      }
 	      it_read_stack_entry = it_next;
@@ -1481,52 +1365,11 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 }
 
 
-
-preprocessor::_pp_token::
-_pp_token(const pp_token::type type, const std::string &value,
-	  const raw_pp_token_index passed_through_raw_token)
-  : _value(value), _macro_invocation(nullptr), _type(type),
-    _passed_through_raw_token(passed_through_raw_token)
-{}
-
-preprocessor::_pp_token::
-_pp_token(const pp_token::type type, std::string &&value,
-	  const raw_pp_token_index passed_through_raw_token) noexcept
-  : _value(std::move(value)),
-    _macro_invocation(nullptr), _type(type),
-    _passed_through_raw_token(passed_through_raw_token)
-{}
-
-void preprocessor::_pp_token::set_type_and_value(const pp_token::type type,
-						 const std::string &value)
-{
-  _type = type;
-  _value = value;
-}
-
-void preprocessor::_pp_token::
-set_macro_invocation(pp_result::macro_invocation *mi) noexcept
-{
-  assert(!_macro_invocation);
-  _macro_invocation = mi;
-}
-
-pp_result::macro_invocation *
-preprocessor::_pp_token::get_macro_invocation() const noexcept
-{
-  return _macro_invocation;
-}
-
-std::string preprocessor::_pp_token::stringify() const
-{
-  return pp_token::stringify(_type, _value);
-}
-
 preprocessor::_scanned_macro_invocation preprocessor::
 _read_func_macro_invocation
 	(const pp_result::macro &m,
 	 raw_pp_tokens_range invocation_range,
-	 const std::function<std::pair<_pp_token, raw_pp_tokens_range>
+	 const std::function<std::pair<pp_token, raw_pp_tokens_range>
 			       (const _read_ctl, const raw_pp_tokens_range&)>
 	   &token_reader)
 {
@@ -1544,7 +1387,7 @@ _read_func_macro_invocation
 
     const auto &_tok =
       token_reader(_read_ctl::no_file_crossing, invocation_range);
-    const _pp_token &tok = _tok.first;
+    const pp_token &tok = _tok.first;
     const raw_pp_tokens_range &tok_src_raw_range = _tok.second;
     invocation_range.end = std::max(invocation_range.end,
 				    tok_src_raw_range.end);
@@ -1644,26 +1487,26 @@ _read_func_macro_invocation
   return result;
 }
 
-std::tuple<preprocessor::_pp_tokens, preprocessor::_pp_token,
+std::tuple<std::vector<pp_token>, pp_token,
 	   std::size_t, std::size_t, raw_pp_token_index>
 preprocessor::
 _read_macro_arg(raw_pp_tokens_range invocation_range,
 		const
-		  std::function<std::pair<_pp_token, raw_pp_tokens_range>
+		  std::function<std::pair<pp_token, raw_pp_tokens_range>
 				(const _read_ctl, const raw_pp_tokens_range&)>
 		  &token_reader,
 		const bool variadic)
 {
-  _pp_tokens arg;
+  std::vector<pp_token> arg;
   std::size_t offset = 0;
   std::size_t n_read = 0;
   std::size_t lparens = 0;
-  _pp_token end_delim{pp_token::type::eof, std::string()};
+  pp_token end_delim{pp_token::type::eof, std::string()};
   bool last_was_ws = false;
   bool in_trailing_ws = false;
 
   auto &&is_end_delim_tok =
-    [&](const _pp_token &tok) {
+    [&](const pp_token &tok) {
       return (!lparens &&
 	      ((!variadic && tok.is_punctuator(",")) ||
 	       tok.is_punctuator(")")));
@@ -1671,7 +1514,7 @@ _read_macro_arg(raw_pp_tokens_range invocation_range,
 
   while (true) {
     auto &&_tok = token_reader(_read_ctl::no_file_crossing, invocation_range);
-    _pp_token &&tok = std::move(_tok.first);
+    pp_token &&tok = std::move(_tok.first);
     const raw_pp_tokens_range &tok_src_raw_range = _tok.second;
     invocation_range.end = std::max(invocation_range.end,
 				    tok_src_raw_range.end);
@@ -1750,7 +1593,7 @@ preprocessor::_scanned_macro_invocation
 preprocessor::_read_defined_operator_invocation
 		(raw_pp_tokens_range invocation_range,
 		 const
-		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+		   std::function<std::pair<pp_token, raw_pp_tokens_range>
 				 (const _read_ctl, const raw_pp_tokens_range&)>
 		   &token_reader)
 {
@@ -1765,7 +1608,7 @@ preprocessor::_read_defined_operator_invocation
       while (true) {
 	auto &&_tok =
 	  token_reader(_read_ctl::no_file_crossing, invocation_range);
-	_pp_token &&tok = std::move(_tok.first);
+	pp_token &&tok = std::move(_tok.first);
 	invocation_range = _tok.second;
 	result.n_tokens++;
 	if (!(tok.is_ws() || tok.is_newline() || tok.is_empty()))
@@ -1773,14 +1616,14 @@ preprocessor::_read_defined_operator_invocation
       }
     };
 
-  _pp_token tok = read_tok_skip_ws();
+  pp_token tok = read_tok_skip_ws();
   if (tok.is_punctuator("(")) {
     with_parens = true;
     tok = read_tok_skip_ws();
   }
 
   if (tok.is_id()) {
-    result.args.emplace_back(std::vector<_pp_token>{std::move(tok)});
+    result.args.emplace_back(std::vector<pp_token>{std::move(tok)});
     result.args_offsets.emplace_back(result.n_tokens - 1);
   } else {
     code_remark remark(code_remark::severity::fatal,
@@ -1808,11 +1651,11 @@ preprocessor::_read_defined_operator_invocation
   return result;
 }
 
-std::vector<preprocessor::_pp_token> preprocessor::
+std::vector<pp_token> preprocessor::
 _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    pp_result::macro_invocation &mi,
-	    std::vector<_pp_tokens> &&args,
-	    std::vector<_pp_tokens> &&exp_args,
+	    std::vector<std::vector<pp_token>> &&args,
+	    std::vector<std::vector<pp_token>> &&exp_args,
 	    const raw_pp_tokens_range &invocation_range)
 {
   const pp_result::macro &m = rmi.get_macro();
@@ -1838,7 +1681,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
   // and so on.
   //
   // For the non-expanded argument values, which are used in
-  // concatenations and stringifications, the associated _pp_tokens
+  // concatenations and stringifications, the associated pp_tokens
   // sequence must not have any leading or trailing whitespace or
   // empties.
   //
@@ -1880,8 +1723,9 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	      repl_toks[repl_pos].get_value() == m.get_arg_names().back());
     };
 
-  std::map<std::string, std::vector<_pp_tokens>::size_type> args_name_map;
-  for (std::vector<_pp_tokens>::size_type i_arg = 0;
+  std::map<std::string, std::vector<std::vector<pp_token>>::size_type>
+    args_name_map;
+  for (std::vector<std::vector<pp_token>>::size_type i_arg = 0;
        i_arg != m.get_arg_names().size(); ++i_arg) {
     assert(m.shall_expand_arg(i_arg) || exp_args[i_arg].empty());
     args_name_map.insert(std::make_pair(m.get_arg_names()[i_arg], i_arg));
@@ -1910,7 +1754,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       return _stringify(args[arg_index]);
     };
 
-  std::vector<_pp_token> result;
+  std::vector<pp_token> result;
   using out_fragment =
     _macro_expansion_forest::rescan_macro_invocation::output::fragment;
   auto &out_fragments = rmi._output;
@@ -1964,7 +1808,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	last_was_ws_or_empty = true;
       }
 
-      _pp_token concat_result{pp_token::type::empty, std::string{}};
+      pp_token concat_result{pp_token::type::empty, std::string{}};
       auto concat_frag = out_fragments._add_fragment
 	(repl_pos, out_fragment::concat_tag{});
       assert(!repl_toks[repl_pos].is_ws());
@@ -1983,7 +1827,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	  arg_index = resolve_arg(repl_pos);
 
 	if (arg_index != no_arg_index) {
-	  const _pp_tokens &arg = args[arg_index];
+	  const std::vector<pp_token> &arg = args[arg_index];
 	  if (!arg.empty()) {
 	    if (arg.size() > 1) {
 	      // Only the argument's last token participates in
@@ -1992,8 +1836,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		   it_arg_tok + 1 != arg.end(); ++it_arg_tok) {
 		assert(!it_arg_tok->is_newline());
 		result.emplace_back(it_arg_tok->get_type(),
-				    it_arg_tok->get_value(),
-				    it_arg_tok->get_passed_through_raw_token());
+				    it_arg_tok->get_value());
 	      }
 	    }
 
@@ -2046,7 +1889,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	      !repl_toks[lookahead_repl_pos].is_punctuator("##")) {
 	    if (!args.back().empty()) {
 	      concat_result = _concat(std::move(concat_result),
-				      _pp_token{
+				      pp_token{
 					repl_toks[repl_pos].get_type(),
 					repl_toks[repl_pos].get_value(),
 				      },
@@ -2068,7 +1911,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	  const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
 	  const auto arg_index = resolve_arg(arg_id_tok_pos);
 	  concat_result = _concat(std::move(concat_result),
-				  _pp_token{
+				  pp_token{
 					pp_token::type::str,
 					stringify(arg_index),
 				  },
@@ -2083,13 +1926,13 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	    arg_index = resolve_arg(repl_pos);
 
 	  if (arg_index != no_arg_index) {
-	    const _pp_tokens &arg = args[arg_index];
+	    const std::vector<pp_token> &arg = args[arg_index];
 	    if (arg.empty())
 	      continue;
 	    assert(!arg.front().is_empty() && !arg.front().is_ws() &&
 		   !arg.front().is_newline());
 	    concat_result = _concat(std::move(concat_result),
-				    _pp_token{
+				    pp_token{
 					arg.front().get_type(),
 					arg.front().get_value()
 				    },
@@ -2109,8 +1952,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		 it_arg_tok + 1 != arg.end(); ++it_arg_tok) {
 	      assert(!it_arg_tok->is_newline());
 	      result.emplace_back(it_arg_tok->get_type(),
-				  it_arg_tok->get_value(),
-				  it_arg_tok->get_passed_through_raw_token());
+				  it_arg_tok->get_value());
 	    }
 
 	    assert(!arg.back().is_empty() && !arg.back().is_ws() &&
@@ -2120,7 +1962,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 
 	  } else {
 	    concat_result = _concat(std::move(concat_result),
-				    _pp_token{
+				    pp_token{
 					repl_toks[repl_pos].get_type(),
 					repl_toks[repl_pos].get_value(),
 				    },
@@ -2155,11 +1997,10 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	  out_fragments._add_fragment(out_fragment::empty_tag{});
 	}
 
-	const _pp_tokens &arg = exp_args[arg_index];
+	const std::vector<pp_token> &arg = exp_args[arg_index];
 	for (const auto &arg_tok : arg) {
 	  assert(!arg_tok.is_newline());
-	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value(),
-			      arg_tok.get_passed_through_raw_token());
+	  result.emplace_back(arg_tok.get_type(), arg_tok.get_value());
 	}
 	out_fragments._add_fragment(repl_pos, arg_index, arg.size(),
 				    out_fragment::arg_tag{});
@@ -2186,23 +2027,19 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
     out_fragments._add_fragment(out_fragment::empty_tag{});
   }
 
-  for (auto &tok : result) {
-    tok.set_macro_invocation(&mi);
-  }
-
   mi._used_macros += m;
 
   return result;
 }
 
-std::vector<preprocessor::_pp_token> preprocessor::
+std::vector<pp_token> preprocessor::
 _expand_one_builtin_special
 			(_macro_expansion_forest::_rescan_macro_invocation &rmi,
-			 std::vector<_pp_tokens> &&args,
+			 std::vector<std::vector<pp_token>> &&args,
 			 const raw_pp_tokens_range &invocation_range)
 {
   const pp_result::macro &m = rmi.get_macro();
-  std::vector<preprocessor::_pp_token> result;
+  std::vector<pp_token> result;
   using out_fragment =
     _macro_expansion_forest::rescan_macro_invocation::output::fragment;
   auto &out_fragments = rmi._output;
@@ -2265,7 +2102,7 @@ _expand_one_builtin_special
 }
 
 std::string preprocessor::
-_stringify(const std::vector<_pp_token> &arg_toks)
+_stringify(const std::vector<pp_token> &arg_toks)
 {
   assert(arg_toks.empty() ||
 	 !(arg_toks.front().is_ws() || arg_toks.front().is_empty() ||
@@ -2304,8 +2141,8 @@ _stringify(const std::vector<_pp_token> &arg_toks)
   return s;
 }
 
-preprocessor::_pp_token preprocessor::
-_concat(_pp_token &&tok1, _pp_token &&tok2,
+pp_token preprocessor::
+_concat(pp_token &&tok1, pp_token &&tok2,
 	const raw_pp_tokens_range &invocation_range)
 {
   assert(tok1.get_type() != pp_token::type::ws);
@@ -2342,19 +2179,19 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
       throw pp_except(remark);
     }
 
-    return _pp_token{pp_token::type::id,
-		     tok1.get_value() + tok2.get_value()};
+    return pp_token{pp_token::type::id,
+		    tok1.get_value() + tok2.get_value()};
 
   } else if (tok1.get_type() == pp_token::type::pp_number &&
 	     tok2.get_type() == pp_token::type::id) {
-    return _pp_token{pp_token::type::pp_number,
-		     tok1.get_value() + tok2.get_value()};
+    return pp_token{pp_token::type::pp_number,
+		    tok1.get_value() + tok2.get_value()};
 
   } else if (tok1.get_type() == pp_token::type::pp_number &&
 	     tok2.get_type() == pp_token::type::punctuator &&
 	     (tok2.get_value() == "-" || tok2.get_value() == "+")) {
-    return _pp_token{pp_token::type::pp_number,
-		     tok1.get_value() + tok2.get_value()};
+    return pp_token{pp_token::type::pp_number,
+		    tok1.get_value() + tok2.get_value()};
   }
 
   if (tok1.get_type() != tok2.get_type()) {
@@ -2404,7 +2241,7 @@ _concat(_pp_token &&tok1, _pp_token &&tok2,
     }
   }
 
-  return _pp_token{tok1.get_type(), std::move(value)};
+  return pp_token{tok1.get_type(), std::move(value)};
 }
 
 void preprocessor::
@@ -2900,15 +2737,14 @@ void preprocessor::_handle_include(const raw_pp_tokens_range &directive_range)
 	   pp_result::_pp_tokens_origins::from_raw_tag{});
 
 	_emit_pp_token(*_pp_result,
-		       _pp_token{
+		       pp_token{
 			 raw_toks[raw_tok.first].get_type(),
 			 raw_toks[raw_tok.first].get_value(),
-			 raw_tok.first
 		       });
 
       } else {
 	_emit_pp_token(*_pp_result,
-		       _pp_token{pp_token::type::eof,std::string{}});
+		       pp_token{pp_token::type::eof,std::string{}});
 	break;
       }
     }
@@ -3120,15 +2956,14 @@ _eval_conditional_inclusion(const raw_pp_tokens_range &directive_range)
 	   pp_result::_pp_tokens_origins::from_raw_tag{});
 
 	_emit_pp_token(*_pp_result,
-		       _pp_token{
+		       pp_token{
 			 raw_toks[raw_tok.first].get_type(),
 			 raw_toks[raw_tok.first].get_value(),
-			 raw_tok.first
 		       });
 
       } else {
 	_emit_pp_token(*_pp_result,
-		       _pp_token{pp_token::type::eof, std::string{}});
+		       pp_token{pp_token::type::eof, std::string{}});
 	break;
       }
   }
@@ -3361,7 +3196,7 @@ preprocessor::_macro_expansion_stack_entry::_macro_expansion_stack_entry
 		(const _macro_expansion_forest::_forest_nodes::size_type _node,
 		 const pp_result::macro &_m,
 		 std::vector<std::size_t> &&_args_offsets,
-		 std::vector<_pp_tokens> &&_args)
+		 std::vector<_pp_tokens_type> &&_args)
   : m(&_m), node(_node),
     args_offsets(std::move(_args_offsets)), args(std::move(_args)), next_arg(0),
     out_tokens(nullptr), n_out_tokens(0), next_out_token(0)

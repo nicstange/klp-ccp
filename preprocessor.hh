@@ -88,8 +88,6 @@ namespace klp
     private:
       class _scanned_macro_invocation;
       class _macro_expansion_stack_entry;
-      class _pp_token;
-      typedef std::vector<_pp_token> _pp_tokens;
       struct _cond_incl_state;
 
       using _macro_expansion_forest =
@@ -98,7 +96,7 @@ namespace klp
       template<typename T>
       void _grab_remarks_from(T &from);
 
-      static pp_token_index _emit_pp_token(pp_result &r, _pp_token &&tok);
+      static pp_token_index _emit_pp_token(pp_result &r, pp_token &&tok);
 
       enum class _read_ctl
       {
@@ -126,7 +124,7 @@ namespace klp
 
       void _handle_pp_directive(const _read_ctl ctl);
 
-      std::pair<bool, std::vector<_pp_token>>
+      std::pair<bool, std::vector<pp_token>>
       _try_expand_raw
 	(const raw_pp_token_index id_tok_index,
 	 const
@@ -145,16 +143,16 @@ namespace klp
 		(const pp_result::macro &m,
 		 raw_pp_tokens_range invocation_range,
 		 const
-		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+		   std::function<std::pair<pp_token, raw_pp_tokens_range>
 				 (const _read_ctl, const raw_pp_tokens_range&)>
 		   &token_reader);
 
-      std::tuple<_pp_tokens, _pp_token, std::size_t, std::size_t,
+      std::tuple<std::vector<pp_token>, pp_token, std::size_t, std::size_t,
 		 raw_pp_token_index>
       _read_macro_arg
 		(raw_pp_tokens_range invocation_range,
 		 const
-		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+		   std::function<std::pair<pp_token, raw_pp_tokens_range>
 				 (const _read_ctl, const raw_pp_tokens_range&)>
 		    &token_reader,
 		 const bool variadic);
@@ -163,28 +161,28 @@ namespace klp
       _read_defined_operator_invocation
 		(raw_pp_tokens_range invocation_range,
 		 const
-		   std::function<std::pair<_pp_token, raw_pp_tokens_range>
+		   std::function<std::pair<pp_token, raw_pp_tokens_range>
 				 (const _read_ctl, const raw_pp_tokens_range&)>
 		   &token_reader);
 
     private:
-      std::vector<_pp_token>
+      std::vector<pp_token>
       _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 		  pp_result::macro_invocation &mi,
-		  std::vector<_pp_tokens> &&args,
-		  std::vector<_pp_tokens> &&exp_args,
+		  std::vector<std::vector<pp_token>> &&args,
+		  std::vector<std::vector<pp_token>> &&exp_args,
 		  const raw_pp_tokens_range &invocation_range);
 
-      std::vector<_pp_token>
+      std::vector<pp_token>
       _expand_one_builtin_special
 			(_macro_expansion_forest::_rescan_macro_invocation &rmi,
-			 std::vector<_pp_tokens> &&args,
+			 std::vector<std::vector<pp_token>> &&args,
 			 const raw_pp_tokens_range &invocation_range);
 
-      static std::string _stringify(const std::vector<_pp_token> &arg_toks);
+      static std::string _stringify(const std::vector<pp_token> &arg_toks);
 
-      _pp_token _concat(_pp_token &&tok1, _pp_token &&tok2,
-			const raw_pp_tokens_range &invocation);
+      pp_token _concat(pp_token &&tok1, pp_token &&tok2,
+		       const raw_pp_tokens_range &invocation);
 
       void _find_passed_through_arg_tokens(const pp_result &pp_result,
 					   pp_result::macro_invocation &mi);
@@ -247,7 +245,7 @@ namespace klp
       std::size_t __counter__;
       const pp_result::macro &_m_defined_op;
 
-      std::queue<_pp_token> _expanded_tokens;
+      std::queue<pp_token> _expanded_tokens;
       bool _maybe_pp_directive;
       bool _line_empty;
       bool _eof;
