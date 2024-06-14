@@ -18,6 +18,7 @@
 
 #include "depreprocessor.hh"
 #include "source_reader.hh"
+#include "source_reader_cache.hh"
 #include "source_writer.hh"
 #include "raw_pp_token.hh"
 #include "callables_wrapper.hh"
@@ -171,19 +172,6 @@ raw_pp_tokens_range depreprocessor::_macro_define_to_emit::get_range_raw()
     return raw_pp_tokens_range{0, 0};
 }
 
-
-source_reader& depreprocessor::_source_reader_cache::
-get(const pp_result::header_inclusion_node &h)
-{
-  const auto id = h.get_id();
-  if (_cache.size() <= id)
-    _cache.resize(id + 1);
-
-  if (!_cache[id])
-    _cache[id] = h.create_source_reader();
-
-  return *_cache[id];
-}
 
 
 depreprocessor::_output_state::_output_state() noexcept
@@ -1380,7 +1368,7 @@ _has_macro_undefs_or_defines_to_emit_before() const noexcept
 void depreprocessor::transformed_input_chunk::
 _write(source_writer &writer, _output_state &state,
        const bool write_newlines_before, const pp_result &pp_result,
-       _source_reader_cache &source_reader_cache,
+       source_reader_cache &source_reader_cache,
        output_remarks &remarks) const
 {
   // This controls whether to insert separating newlines before any
@@ -2513,7 +2501,7 @@ has_macro_undefs_or_defines_to_emit() const noexcept
 void depreprocessor::_header_inclusion_chunk::
 write(source_writer &writer, _output_state &state,
       const bool write_newlines_before, const pp_result &pp_result,
-      _source_reader_cache &source_reader_cache, output_remarks &remarks) const
+      source_reader_cache &source_reader_cache, output_remarks &remarks) const
 {
   bool write_newlines;
   if (has_macro_undefs_or_defines_to_emit()) {
@@ -2628,7 +2616,7 @@ has_macro_undefs_or_defines_to_emit() const noexcept
 void depreprocessor::_cond_incl_transition_chunk::
 write(source_writer &writer, _output_state &state,
       const bool write_newlines_before, const pp_result &pp_result,
-      _source_reader_cache &source_reader_cache, output_remarks &remarks) const
+      source_reader_cache &source_reader_cache, output_remarks &remarks) const
 {
   bool write_newlines;
   if (has_macro_undefs_or_defines_to_emit()) {
@@ -2848,7 +2836,7 @@ void depreprocessor::operator()(const std::string &outfile)
   _compute_needed_macro_defs_and_undefs();
 
   source_writer writer{outfile};
-  _source_reader_cache source_reader_cache;
+  source_reader_cache source_reader_cache;
 
   bool is_first_chunk = true;
   _output_state state;
@@ -3854,7 +3842,7 @@ void depreprocessor::_write_newlines(source_writer &writer,
 				     const raw_pp_token_index next_begin_raw,
 				     const bool need_newline,
 				     const pp_result &pp_result,
-				     _source_reader_cache &source_reader_cache)
+				     source_reader_cache &source_reader_cache)
 {
   const raw_pp_tokens &raw_toks = pp_result.get_raw_tokens();
   if ((state.last_input_pos_raw !=
@@ -3931,7 +3919,7 @@ void
 depreprocessor::_write_directive(source_writer &writer, _output_state &state,
 				 const raw_pp_tokens_range &directive_range,
 				 const pp_result &pp_result,
-				 _source_reader_cache &source_reader_cache)
+				 source_reader_cache &source_reader_cache)
 {
   auto it_source = pp_result.intersecting_sources_begin(directive_range);
   assert(it_source !=  pp_result.intersecting_sources_end(directive_range));
@@ -3952,7 +3940,7 @@ void depreprocessor::_write_define(source_writer &writer, _output_state &state,
 				   const _macro_define_to_emit &md,
 				   const bool write_newlines_before,
 				   const pp_result &pp_result,
-				   _source_reader_cache &source_reader_cache,
+				   source_reader_cache &source_reader_cache,
 				   output_remarks &remarks)
 {
   const raw_pp_tokens_range &md_range = md.get_range_raw();
@@ -4027,7 +4015,7 @@ void depreprocessor::_write_undef(source_writer &writer, _output_state &state,
 				  const _macro_undef_to_emit &mu,
 				  const bool write_newlines_before,
 				  const pp_result &pp_result,
-				  _source_reader_cache &source_reader_cache)
+				  source_reader_cache &source_reader_cache)
 {
   const raw_pp_tokens_range &mu_range = mu.get_range_raw();
 
@@ -4054,7 +4042,7 @@ _write_defines_and_undefs(source_writer &writer, _output_state &state,
 			  const std::vector<_macro_undef_to_emit> &mus,
 			  const bool write_newlines_before,
 			  const pp_result &pp_result,
-			  _source_reader_cache &source_reader_cache,
+			  source_reader_cache &source_reader_cache,
 			  output_remarks &remarks)
 {
   bool write_newlines = write_newlines_before;
@@ -4406,7 +4394,7 @@ _write_cond_incl_transition(source_writer &writer,
 			    const _cond_incl_transition_kind k,
 			    const bool write_newlines_before,
 			    const pp_result &pp_result,
-			    _source_reader_cache &source_reader_cache,
+			    source_reader_cache &source_reader_cache,
 			    output_remarks &remarks)
 {
   assert(write_newlines_before || state.last_was_newline);

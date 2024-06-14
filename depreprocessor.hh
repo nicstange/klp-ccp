@@ -28,7 +28,7 @@ namespace klp
 {
   namespace ccp
   {
-    class source_reader;
+    class source_reader_cache;
     class source_writer;
     class output_remarks;
 
@@ -61,15 +61,6 @@ namespace klp
 	raw_pp_tokens_range get_range_raw() const noexcept;
 
 	std::reference_wrapper<const pp_result::macro> m;
-      };
-
-      class _source_reader_cache
-      {
-      public:
-	source_reader& get(const pp_result::header_inclusion_node &h);
-
-      private:
-	std::vector<std::unique_ptr<source_reader>> _cache;
       };
 
       enum class _cond_incl_transition_kind
@@ -304,7 +295,7 @@ namespace klp
 	_write(source_writer &writer, _output_state &state,
 	       const bool write_newlines_before,
 	       const pp_result &pp_result,
-	       _source_reader_cache &source_reader_cache,
+	       source_reader_cache &source_reader_cache,
 	       output_remarks &remarks) const;
 
 	pp_tokens_range _bounding_r;
@@ -406,7 +397,7 @@ namespace klp
 	void write(source_writer &writer, _output_state &state,
 		   const bool write_newlines_before,
 		   const pp_result &pp_result,
-		   _source_reader_cache &source_reader_cache,
+		   source_reader_cache &source_reader_cache,
 		   output_remarks &remarks) const;
 
       private:
@@ -460,7 +451,7 @@ namespace klp
 		   _output_state &state,
 		   const bool write_newlines_before,
 		   const pp_result &pp_result,
-		   _source_reader_cache &source_reader_cache,
+		   source_reader_cache &source_reader_cache,
 		   output_remarks &remarks) const;
 
       private:
@@ -632,23 +623,23 @@ namespace klp
 				  const raw_pp_token_index next_begin_raw,
 				  const bool need_newline,
 				  const pp_result &pp_result,
-				  _source_reader_cache &source_reader_cache);
+				  source_reader_cache &source_reader_cache);
 
       static void _write_directive(source_writer &writer, _output_state &state,
 				   const raw_pp_tokens_range &directive_range,
 				   const pp_result &pp_result,
-				   _source_reader_cache &source_reader_cache);
+				   source_reader_cache &source_reader_cache);
       static void _write_define(source_writer &writer, _output_state &state,
 				const _macro_define_to_emit &md,
 				const bool write_newlines_before,
 				const pp_result &pp_result,
-				_source_reader_cache &source_reader_cache,
+				source_reader_cache &source_reader_cache,
 				output_remarks &remarks);
       static void _write_undef(source_writer &writer, _output_state &state,
 			       const _macro_undef_to_emit &mu,
 			       const bool write_newlines_before,
 			       const pp_result &pp_result,
-			       _source_reader_cache &source_reader_cache);
+			       source_reader_cache &source_reader_cache);
 
       static void
       _write_defines_and_undefs(source_writer &writer, _output_state &state,
@@ -656,7 +647,7 @@ namespace klp
 				const std::vector<_macro_undef_to_emit> &mus,
 				const bool write_newlines_before,
 				const pp_result &pp_result,
-				_source_reader_cache &source_reader_cache,
+				source_reader_cache &source_reader_cache,
 				output_remarks &remarks);
 
       typedef std::vector
@@ -694,7 +685,7 @@ namespace klp
 		 const _cond_incl_transition_kind k,
 		 const bool write_newlines_before,
 		 const pp_result &pp_result,
-		 _source_reader_cache &source_reader_cache,
+		 source_reader_cache &source_reader_cache,
 		 output_remarks &remarks);
 
       const pp_result &_pp_result;
