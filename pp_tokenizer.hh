@@ -67,7 +67,8 @@ namespace klp
 	  const noexcept;
 	bool _at_eof() const noexcept;
 
-	raw_pp_token _tokenize_string(const char delim,
+	raw_pp_token _tokenize_string(const range_in_file::loc_type begin_loc,
+				      const char delim,
 				      const bool delim_escapable,
 				      const pp_token::type tok_type);
 	raw_pp_token _tokenize_punctuator();
@@ -81,7 +82,6 @@ namespace klp
 	buffer_type::const_iterator _buf_it;
 
 	range_in_file::loc_type _line_length;
-	range_in_file::loc_type _tok_loc;
 	enum class expect_qh_str
 	{
 	  no,
