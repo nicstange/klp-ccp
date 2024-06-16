@@ -59,9 +59,9 @@ namespace klp
 
 	void _refill_buf();
 	void _refill_queue_half(const bool odd_half);
-	void _advance_queue_to_pos(const std::size_t new_queue_pos);
+	void _advance_queue_to_pos(const unsigned int new_queue_pos);
 
-	std::size_t _next_queued_non_continuation_pos(std::size_t pos)
+	unsigned int _next_queued_non_continuation_pos(unsigned int pos)
 	  const noexcept;
 	bool _at_eof() const noexcept;
 
@@ -99,12 +99,12 @@ namespace klp
 	// other half.
 	// Two (or more) consecutive zeroes encode EOF.
 	static constexpr unsigned int _queue_capacity_log2 = 4;
-	static constexpr std::size_t _queue_capacity =
-	  static_cast<std::size_t>(1) << _queue_capacity_log2;
+	static constexpr unsigned int _queue_capacity =
+	  1u << _queue_capacity_log2;
 	char _queue[_queue_capacity];
 	range_in_file::loc_type _queue_locs[_queue_capacity];
 	range_in_file::loc_type _next_queue_loc;
-	std::size_t _queue_pos;
+	unsigned int _queue_pos;
       };
     }
 

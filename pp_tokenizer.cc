@@ -76,8 +76,8 @@ void _pp_tokenizer::_refill_buf()
 
 void _pp_tokenizer::_refill_queue_half(bool odd_half)
 {
-  const std::size_t queue_half_begin_pos =
-    static_cast<std::size_t>(odd_half) << (_queue_capacity_log2 - 1);
+  const unsigned int queue_half_begin_pos =
+    static_cast<unsigned int>(odd_half) << (_queue_capacity_log2 - 1);
   char * const queue_half = &_queue[queue_half_begin_pos];
   range_in_file::loc_type * const queue_half_locs =
     &_queue_locs[queue_half_begin_pos];
@@ -96,7 +96,7 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
     _pending[0] = 0;
     _pending[1] = 0;
   }
-  auto n_copy = std::min<std::size_t>(_buf.cend() - _buf_it,
+  auto n_copy = std::min<unsigned int>(_buf.cend() - _buf_it,
 				      (_queue_capacity >> 1) - copy_dst_pos);
   std::copy(_buf_it, _buf_it + n_copy, &queue_half[copy_dst_pos]);
   std::generate(&queue_half_locs[copy_dst_pos],
@@ -108,9 +108,9 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
   // Optimistically assume that the queue_half[] half got fully refilled
   // above, search for a backslash possibly indicating a continuation
   // line, in the hope there is none.
-  std::size_t backslash_pos = std::find(queue_half,
-					queue_half + (_queue_capacity >> 1),
-					'\\') - queue_half;
+  unsigned int backslash_pos = std::find(queue_half,
+					 queue_half + (_queue_capacity >> 1),
+					 '\\') - queue_half;
 
   while (copy_dst_pos != (_queue_capacity >> 1) ||
 	 backslash_pos != (_queue_capacity >> 1)) [[unlikely]] {
@@ -142,8 +142,7 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
 	// this is explictly flipped to a non-zero value to
 	// get things going when _buf.empty() is still true.
 	const auto other_queue_half_begin_pos =
-	  (queue_half_begin_pos ^
-	   (static_cast<std::size_t>(1) << (_queue_capacity_log2 - 1)));
+	  queue_half_begin_pos ^ (1u << (_queue_capacity_log2 - 1));
 	const auto other_queue_half_last_pos =
 	  other_queue_half_begin_pos + ((_queue_capacity >> 1) - 1);
 	if (!_buf.empty() || _queue[other_queue_half_last_pos] != 0)
@@ -158,8 +157,8 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
 	  break;
 	}
       }
-      n_copy = std::min<std::size_t>(_buf.cend() - _buf_it,
-				     (_queue_capacity >> 1) - copy_dst_pos);
+      n_copy = std::min<unsigned int>(_buf.cend() - _buf_it,
+				      (_queue_capacity >> 1) - copy_dst_pos);
       std::copy(_buf_it, _buf_it + n_copy, &queue_half[copy_dst_pos]);
       std::generate(&queue_half_locs[copy_dst_pos],
 		    &queue_half_locs[copy_dst_pos + n_copy],
@@ -178,7 +177,7 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
     }
 
     if (backslash_pos != (_queue_capacity >> 1)) {
-      std::size_t cont_lines_end_pos;
+      unsigned int cont_lines_end_pos;
       for (cont_lines_end_pos = backslash_pos;
 	   cont_lines_end_pos != ((_queue_capacity >> 1) - (backslash_pos & 1));
 	   cont_lines_end_pos += 2) {
@@ -266,7 +265,7 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
   }
 }
 
-void _pp_tokenizer::_advance_queue_to_pos(const std::size_t new_queue_pos)
+void _pp_tokenizer::_advance_queue_to_pos(const unsigned int new_queue_pos)
 {
   // With queue refilling in batches of the two queue halves,
   // advancing by more than such a half is not possible.
@@ -284,7 +283,7 @@ void _pp_tokenizer::_advance_queue_to_pos(const std::size_t new_queue_pos)
   }
 }
 
-std::size_t _pp_tokenizer::_next_queued_non_continuation_pos(std::size_t pos)
+unsigned int _pp_tokenizer::_next_queued_non_continuation_pos(unsigned int pos)
   const noexcept
 {
   pos &= _queue_capacity - 1;
