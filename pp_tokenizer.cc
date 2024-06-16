@@ -42,103 +42,228 @@ void _pp_tokenizer::init_state()
   // constructor. Provide this init_state() to be called from
   // the derived class' constructor.
   // As the _buf is still empty(), we need to have a non-zero char in
-  // the "last" position to get _read_next_char_raw() going, otherwise
+  // the "last" position to get _refill_queue_half() going, otherwise
   // it would report an EOF.
   _queue[_queue_capacity - 1] = std::numeric_limits<char>::max();
-  _queue[0] = _read_next_char();
-  std::size_t i;
-  for (i = 1; i < _queue_capacity && !_buf.empty(); ++i) {
-    _queue_locs[i] = _next_queue_loc;
-    _queue[i] = _read_next_char();
-  }
-  for (; i < _queue_capacity; ++i) {
-    _queue_locs[i] = _queue_locs[i - 1];
-    _queue[i] = 0;
-  }
+  _refill_queue_half(false);
+  _refill_queue_half(true);
 }
 
-char _pp_tokenizer::_read_next_char_raw()
+void _pp_tokenizer::_refill_buf()
 {
-  if (_pending[0]) {
-    const char c = _pending[0];
-    _pending[0] = _pending[1];
-    _pending[1] = 0;
-    return c;
-  }
-
-  if (_buf_it == _buf.cend()) {
-    // If an EOF has already been seen, don't invoke the source_reader
-    // again. The additional, necessary condition that the last
-    // character read is zero is needed to get things going at
-    // initialization.
-    if ((_queue[(_queue_pos + _queue_capacity - 1) & (_queue_capacity - 1)]
-	 == 0)
-	&& _buf.empty()) {
-      return 0;
-    }
-    _buf = this->read_raw();
-    _buf_it = _buf.cbegin();
-    if (_buf.empty()) {
-      if (_line_length) {
-	this->add_line(_line_length);
-	_line_length = 0;
-      }
-      return 0;
-    }
-
-    auto prev = _buf.cbegin();
-    auto next = std::find(prev, _buf.cend(), '\n');
-    while (next != _buf.cend()) {
-      ++next;
-      _line_length += next - prev;
+  assert(_buf_it == _buf.cend());
+  _buf = this->read_raw();
+  _buf_it = _buf.cbegin();
+  if (_buf.empty()) {
+    if (_line_length) {
       this->add_line(_line_length);
       _line_length = 0;
-      prev = next;
-      next = std::find(prev, _buf.cend(), '\n');
     }
-    _line_length += next - prev;
   }
 
-  return static_cast<char>(*_buf_it++);
+  auto prev = _buf.cbegin();
+  auto next = std::find(prev, _buf.cend(), '\n');
+  while (next != _buf.cend()) {
+    ++next;
+    _line_length += next - prev;
+    this->add_line(_line_length);
+    _line_length = 0;
+    prev = next;
+    next = std::find(prev, _buf.cend(), '\n');
+  }
+  _line_length += next - prev;
 }
 
-char _pp_tokenizer::_read_next_char()
+void _pp_tokenizer::_refill_queue_half(bool odd_half)
 {
-  char c = _read_next_char_raw();
-  _next_queue_loc += 1;
+  const std::size_t queue_half_begin_pos =
+    static_cast<std::size_t>(odd_half) << (_queue_capacity_log2 - 1);
+  char * const queue_half = &_queue[queue_half_begin_pos];
+  range_in_file::loc_type * const queue_half_locs =
+    &_queue_locs[queue_half_begin_pos];
 
-  // Collate back-to-back continuation lines and report the fact that
-  // some appeared in the input to the upper layers.
-  bool is_continuation_line = false;
-  while (c == '\\') {
-    const char next = _read_next_char_raw();
-    assert(!_pending[0]);
-    assert(!_pending[1]);
-    if (!next) {
-      this->report_warning("no newline after continuation", _next_queue_loc);
-      return 0;
+  // Fast path: copy everything available over from _buf and hope that
+  // a.) there are enough bytes available in _buf and b.) there are no
+  // continuation lines which would require special handling.
+  auto copy_dst_pos = 0;
+  if (_pending[0]) {
+    queue_half[copy_dst_pos] = _pending[0];
+    queue_half_locs[copy_dst_pos++] = _next_queue_loc++;
+    if (_pending[1]) {
+      queue_half[copy_dst_pos] = _pending[1];
+      queue_half_locs[copy_dst_pos++] = _next_queue_loc++;
     }
-    if (next != '\n') {
-      if (!is_continuation_line) {
-	_pending[0] = next;
-	return c;
-      } else {
-	_pending[0] = c;
-	_pending[1] = next;
-	return 0;
+    _pending[0] = 0;
+    _pending[1] = 0;
+  }
+  auto n_copy = std::min<std::size_t>(_buf.cend() - _buf_it,
+				      (_queue_capacity >> 1) - copy_dst_pos);
+  std::copy(_buf_it, _buf_it + n_copy, &queue_half[copy_dst_pos]);
+  std::generate(&queue_half_locs[copy_dst_pos],
+		&queue_half_locs[copy_dst_pos + n_copy],
+		[&]() { return _next_queue_loc++; });
+  _buf_it += n_copy;
+  copy_dst_pos += n_copy;
+
+  // Optimistically assume that the queue_half[] half got fully refilled
+  // above, search for a backslash possibly indicating a continuation
+  // line, in the hope there is none.
+  std::size_t backslash_pos = std::find(queue_half,
+					queue_half + (_queue_capacity >> 1),
+					'\\') - queue_half;
+
+  while (copy_dst_pos != (_queue_capacity >> 1) ||
+	 backslash_pos != (_queue_capacity >> 1)) [[unlikely]] {
+    // Slow path, either of the following has happened:
+    // - There had not been enough bytes available in _buf[]
+    //   to refill the full queue half or
+    // - there's a backslash, which might start a continuation line
+    //   marker encoding or
+    // - there had been sequence of continuation lines removed
+    //   somewhere and the resulting gap at the end needs another
+    //   refill.
+    const auto copy_dst_begin_pos = copy_dst_pos;
+    if (_pending[0]) {
+      queue_half[copy_dst_pos] = _pending[0];
+      queue_half_locs[copy_dst_pos++] = _next_queue_loc++;
+      if (_pending[1]) {
+	queue_half[copy_dst_pos] = _pending[1];
+	queue_half_locs[copy_dst_pos++] = _next_queue_loc++;
       }
-    } else {
-      // As _next_queue_loc had been incremented once above, add only
-      // one more in the first iteration.
-      _next_queue_loc += 1 + is_continuation_line;
-      is_continuation_line = true;
-      c = _read_next_char_raw();
-      if (c != '\\')
-	_pending[0] = c;
+      _pending[0] = 0;
+      _pending[1] = 0;
+    }
+    while (copy_dst_pos != (_queue_capacity >> 1)) {
+      if (_buf_it == _buf.cend()) {
+	// Don't retry reading from the input once the EOF
+	// has been encountered. During normal operation, the
+	// other queue half last's byte being zero is a necessary
+	// condition for having seen the EOF. At startup, this
+	// this is explictly flipped to a non-zero value to
+	// get things going when _buf.empty() is still true.
+	const auto other_queue_half_begin_pos =
+	  (queue_half_begin_pos ^
+	   (static_cast<std::size_t>(1) << (_queue_capacity_log2 - 1)));
+	const auto other_queue_half_last_pos =
+	  other_queue_half_begin_pos + ((_queue_capacity >> 1) - 1);
+	if (!_buf.empty() || _queue[other_queue_half_last_pos] != 0)
+	  _refill_buf();
+	if (_buf.empty()) {
+	  std::fill(&queue_half[copy_dst_pos],
+		    &queue_half[_queue_capacity >> 1], 0);
+	  std::fill(&queue_half_locs[copy_dst_pos],
+		    &queue_half_locs[_queue_capacity >> 1],
+		    _next_queue_loc);
+	  copy_dst_pos = _queue_capacity >> 1;
+	  break;
+	}
+      }
+      n_copy = std::min<std::size_t>(_buf.cend() - _buf_it,
+				     (_queue_capacity >> 1) - copy_dst_pos);
+      std::copy(_buf_it, _buf_it + n_copy, &queue_half[copy_dst_pos]);
+      std::generate(&queue_half_locs[copy_dst_pos],
+		    &queue_half_locs[copy_dst_pos + n_copy],
+		    [&]() { return _next_queue_loc++; });
+      _buf_it += n_copy;
+      copy_dst_pos += n_copy;
+    }
+
+    // If the found backslash position, if any, is after or at the
+    // beginning of the range just refilled, the search needs to be
+    // redone.
+    if (backslash_pos >= copy_dst_begin_pos) {
+      backslash_pos = std::find(&queue_half[copy_dst_begin_pos],
+				queue_half + (_queue_capacity >> 1),
+				'\\') - queue_half;
+    }
+
+    if (backslash_pos != (_queue_capacity >> 1)) {
+      std::size_t cont_lines_end_pos;
+      for (cont_lines_end_pos = backslash_pos;
+	   cont_lines_end_pos != ((_queue_capacity >> 1) - (backslash_pos & 1));
+	   cont_lines_end_pos += 2) {
+	if (queue_half[cont_lines_end_pos] != '\\' ||
+	    queue_half[cont_lines_end_pos + 1] != '\n')
+	  break;
+      }
+      if (cont_lines_end_pos == ((_queue_capacity >> 1) - 1)) {
+	// The initial backslash is at an odd position, and the search
+	// extends beyond the queue half.
+	// That is, if the last, not yet inspected character from
+	// the queue_half[] is a '\\', then peek one more character
+	// from the input to see if the two combine to
+	// a continuation line marker encoding.
+	if (queue_half[cont_lines_end_pos] == '\\') {
+	  if (_buf_it == _buf.cend() && !_buf.empty())
+	    _refill_buf();
+	  if (!_buf.empty()) {
+	    _pending[0] = *(_buf_it++);
+	    if (_pending[0] == '\n') {
+	      _pending[0] = 0;
+	      ++_next_queue_loc;
+	      ++cont_lines_end_pos;
+	      assert(cont_lines_end_pos == (_queue_capacity >> 1));
+	    }
+	  }
+	}
+      }
+      // If the continuation line markers extend to the end of
+      // queue_half, attempt to consume more from the input, if any.
+      if (cont_lines_end_pos == (_queue_capacity >> 1)) {
+	do {
+	  assert(_pending[0] == 0 && _pending[1] == 0);
+	  assert(!_buf.empty());
+	  if (_buf_it == _buf.cend())
+	    _refill_buf();
+	  if (_buf.empty())
+	    break;
+	  _pending[0] = *(_buf_it++);
+	  if (_pending[0] == '\\') {
+	    assert(!_buf.empty());
+	    if (_buf_it == _buf.cend())
+	      _refill_buf();
+	    if (_buf.empty())
+	      break;
+	    _pending[1] = *(_buf_it++);
+	    if (_pending[1] == '\n') {
+	      _pending[0] = 0;
+	      _pending[1] = 0;
+	      _next_queue_loc += 2;
+	    }
+	  }
+	} while (_pending[0] == 0);
+      }
+
+      if (cont_lines_end_pos != backslash_pos) {
+	// Remove the continuation lines from the queue by moving
+	// subsequent characters to their starting position.
+	// Successive continuation lines are collated into one
+	// and recorded with a single '\0' character.
+	queue_half[backslash_pos] = 0;
+	if (cont_lines_end_pos != backslash_pos + 1) {
+	  std::copy(&queue_half[cont_lines_end_pos],
+		    &queue_half[_queue_capacity >> 1],
+		    &queue_half[backslash_pos + 1]);
+	  // Keep the recorded file locations in sync with the moved
+	  // characters.
+	  std::copy(&queue_half_locs[cont_lines_end_pos],
+		    &queue_half_locs[_queue_capacity >> 1],
+		    &queue_half_locs[backslash_pos + 1]);
+	} else {
+	  assert(cont_lines_end_pos == (_queue_capacity >> 1));
+	}
+	// Make the next loop iteration to fill up the gap at
+	// the tail.
+	copy_dst_pos =
+	  backslash_pos + 1 + ((_queue_capacity >> 1) - cont_lines_end_pos);
+      }
+
+      // In either case, search for possibly more occurences of '\\'.
+      backslash_pos = std::find(&queue_half[backslash_pos + 1],
+				queue_half + (_queue_capacity >> 1),
+				'\\') - queue_half;
     }
   }
-
-  return !is_continuation_line ? c : 0;
 }
 
 void _pp_tokenizer::_advance_queue_to_pos(const std::size_t new_queue_pos)
@@ -151,14 +276,7 @@ void _pp_tokenizer::_advance_queue_to_pos(const std::size_t new_queue_pos)
   _queue_pos = new_queue_pos;
   if ((old_pos ^ _queue_pos) & (_queue_capacity >> 1)) {
     // Crossed into the other queue half. Refill the half just left.
-    const auto refill_begin_pos = old_pos & ~((_queue_capacity >> 1) - 1);
-    const auto refill_end_pos = refill_begin_pos + (_queue_capacity >> 1);
-    for (std::size_t refill_cur_pos = refill_begin_pos;
-	 refill_cur_pos != refill_end_pos;
-	 ++refill_cur_pos) {
-      _queue_locs[refill_cur_pos] = _next_queue_loc;
-      _queue[refill_cur_pos] = _read_next_char();
-    }
+    _refill_queue_half(old_pos >> (_queue_capacity_log2 - 1));
 
     // When crossing a queue half boundary, wrapping _queue_pos
     // might be needed (i.e. every other time).

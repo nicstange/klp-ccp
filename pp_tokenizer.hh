@@ -57,9 +57,8 @@ namespace klp
 	virtual pp_except report_fatal(const std::string &msg,
 				       const range_in_file::loc_type loc) = 0;
 
-	char _read_next_char_raw();
-
-	char _read_next_char();
+	void _refill_buf();
+	void _refill_queue_half(const bool odd_half);
 	void _advance_queue_to_pos(const std::size_t new_queue_pos);
 
 	std::size_t _next_queued_non_continuation_pos(std::size_t pos)
@@ -99,7 +98,9 @@ namespace klp
 	// two, to enable batched refill whenever crossing into the
 	// other half.
 	// Two (or more) consecutive zeroes encode EOF.
-	static constexpr std::size_t _queue_capacity = 16;
+	static constexpr unsigned int _queue_capacity_log2 = 4;
+	static constexpr std::size_t _queue_capacity =
+	  static_cast<std::size_t>(1) << _queue_capacity_log2;
 	char _queue[_queue_capacity];
 	range_in_file::loc_type _queue_locs[_queue_capacity];
 	range_in_file::loc_type _next_queue_loc;
