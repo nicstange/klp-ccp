@@ -223,14 +223,11 @@ void preprocessor::register_predefined_macro
   const auto &skip_ws
     = [](const raw_pp_tokens::const_iterator &it,
 	 const raw_pp_tokens::const_iterator &end) {
-	if (it == end || !it->is_ws()) {
-	  return it;
-	}
-	// No need to loop here: pp_tokenizer won't emit more than one
-	// consecutive whitespace.
-	assert(it + 1 == end || !(it + 1)->is_ws());
-	return it + 1;
-      };
+	  return std::find_if(it, end,
+			      [](const raw_pp_token &raw_tok) {
+				return !raw_tok.is_ws() && !raw_tok.is_empty();
+			      });
+	 };
 
   raw_pp_tokens::const_iterator signature_end;
   std::string name;
@@ -295,13 +292,10 @@ void preprocessor::register_predefined_macro_undef
   const auto &skip_ws
     = [](const raw_pp_tokens::const_iterator &it,
 	 const raw_pp_tokens::const_iterator &end) {
-	if (it == end || !it->is_ws()) {
-	  return it;
-	}
-	// No need to loop here: pp_tokenizer won't emit more than one
-	// consecutive whitespace.
-	assert(it + 1 == end || !(it + 1)->is_ws());
-	return it + 1;
+	 return std::find_if(it, end,
+			[](const raw_pp_token &raw_tok) {
+			  return !raw_tok.is_ws() && !raw_tok.is_empty();
+			});
       };
 
   const auto it_name = skip_ws(name_toks.cbegin(), name_toks.cend());
@@ -426,7 +420,7 @@ _read_next_plain_token(const _read_ctl ctl)
     _handle_pp_directive(ctl);
     goto again;
 
-  } else if (!raw_tok.is_ws()) {
+  } else if (!raw_tok.is_ws() && !raw_tok.is_empty()) {
     _maybe_pp_directive = false;
 
   }
@@ -597,7 +591,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
 	_grab_remarks_from(_tokenizers.top());
 	_pp_result->_append_token(tok);
 	raw_end = _pp_result->_get_last_raw_index() + 1;
-      } while (tok.is_ws());
+      } while (tok.is_ws() || tok.is_empty());
 
       if (tok.is_newline()) {
 	_pp_result->_append_token(tok);
@@ -625,7 +619,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
 
       break;
 
-    } else if (!tok.is_ws()) {
+    } else if (!tok.is_ws() && !tok.is_empty()) {
       endif_possible = false;
     }
   }
@@ -641,8 +635,10 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
     return;
   }
 
-  if (it_tok->is_ws())
-    ++it_tok;
+  it_tok = std::find_if(it_tok, _pp_result->get_raw_tokens().begin() + raw_end,
+			[](const raw_pp_token &raw_tok) {
+			  return !raw_tok.is_ws() && !raw_tok.is_empty();
+			});
 
   if (it_tok->is_newline() ||
       it_tok == _pp_result->get_raw_tokens().begin() + raw_end) {
@@ -650,7 +646,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
     return;
   }
 
-  assert(!it_tok->is_ws());
+  assert(!it_tok->is_ws() && !it_tok->is_empty());
   if (!it_tok->is_id()) {
     code_remark remark(code_remark::severity::fatal,
 		       "identifier expected in preprocessor directive",
@@ -681,7 +677,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
       return;
 
     ++it_tok;
-    if (it_tok->is_ws())
+    while (it_tok->is_ws() || it_tok->is_empty())
       ++it_tok;
 
     if (!it_tok->is_id()) {
@@ -711,7 +707,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
       return;
 
     ++it_tok;
-    if (it_tok->is_ws())
+    while (it_tok->is_ws() || it_tok->is_empty())
       ++it_tok;
 
     if (!it_tok->is_id()) {
@@ -787,7 +783,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
 
   if (it_tok->get_value() == "define") {
     ++it_tok;
-    if (it_tok->is_ws())
+    while (it_tok->is_ws() || it_tok->is_empty())
       ++it_tok;
 
     if (!it_tok->is_id()) {
@@ -815,7 +811,7 @@ void preprocessor::_handle_pp_directive(const _read_ctl ctl)
     _macros.insert(std::make_pair(m.get_name(), std::ref(m)));
   } else if (it_tok->get_value() == "undef") {
     ++it_tok;
-    if (it_tok->is_ws())
+    while (it_tok->is_ws() || it_tok->is_empty())
       ++it_tok;
 
     if (!it_tok->is_id()) {
@@ -1693,14 +1689,10 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
     };
 
   auto &&skip_ws =
-    [&](const raw_pp_tokens::size_type repl_pos) {
-      if (repl_pos != repl_toks.size() && repl_toks[repl_pos].is_ws()) {
-	// No whitespace at beginning or end of replacement list.
-	assert(repl_pos + 1 != repl_toks.size());
-	// No multiple consecutive whitespace tokens in replacement
-	// list.
-	assert(!repl_toks[repl_pos + 1].is_ws());
-	return repl_pos + 1;
+    [&](raw_pp_tokens::size_type repl_pos) {
+      while (repl_pos != repl_toks.size() &&
+	     (repl_toks[repl_pos].is_ws() || repl_toks[repl_pos].is_empty())) {
+	++repl_pos;
       }
       return repl_pos;
     };
@@ -1811,7 +1803,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
       pp_token concat_result{pp_token::type::empty, std::string{}};
       auto concat_frag = out_fragments._add_fragment
 	(repl_pos, out_fragment::concat_tag{});
-      assert(!repl_toks[repl_pos].is_ws());
+      assert(!repl_toks[repl_pos].is_ws() && !repl_toks[repl_pos].is_empty());
       if (is_stringification(repl_pos)) {
 	const auto arg_id_tok_pos = skip_ws(repl_pos + 1);
 	const auto arg_index = resolve_arg(arg_id_tok_pos);
@@ -1858,7 +1850,7 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
 	     repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
 	repl_pos = next_concat_tok_repl_pos;
 	assert(repl_pos != repl_toks.size());
-	assert(!repl_toks[repl_pos].is_ws());
+	assert(!repl_toks[repl_pos].is_ws() && !repl_toks[repl_pos].is_empty());
 
 	if (repl_toks[repl_pos].is_punctuator("##")) {
 	  // Multile consecutive ## operators, collate.
@@ -3007,7 +2999,7 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
 {
   const raw_pp_tokens::const_iterator begin =
     _pp_result->get_raw_tokens().begin() + directive_range.begin;
-  const raw_pp_tokens::const_iterator end =
+  raw_pp_tokens::const_iterator end =
     _pp_result->get_raw_tokens().begin() + directive_range.end - 1;
   assert (begin != end);
   assert(end != _pp_result->get_raw_tokens().end());
@@ -3015,14 +3007,10 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
   assert(end->is_newline() || end->is_eof());
 
   auto skip_ws = [&end](const decltype(end) it) {
-    if (it == end || !it->is_ws()) {
-      return it;
-    }
-    // No need to loop here:
-    // Macro definitions come in a single line and pp_tokenizer
-    // won't emit more than one consecutive whitespace.
-    assert(it + 1 == end || !(it + 1)->is_ws());
-    return it + 1;
+    return std::find_if(it, end,
+			[](const raw_pp_token &raw_tok) {
+			  return !raw_tok.is_ws() && !raw_tok.is_empty();
+			});
   };
 
   auto it = skip_ws(begin + 1);
@@ -3045,6 +3033,10 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
   std::tie(it, name, func_like, arg_names, variadic)
     = _parse_macro_signature(it, end, report_fatal);
 
+  it = it = std::find_if(it, end,
+			 [](const raw_pp_token &raw_tok) {
+			   return !raw_tok.is_empty();
+			 });
   if (it != end && !it->is_ws()) {
     code_remark remark(code_remark::severity::warning,
 		       "no whitespace before macro replacement list",
@@ -3054,6 +3046,12 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
   }
 
   it = skip_ws(it);
+  // Strip whitespace + empties at the end of the replacement list.
+  end = std::find_if(std::make_reverse_iterator(end),
+		     std::make_reverse_iterator(it),
+		     [](const raw_pp_token &raw_tok) {
+		       return !raw_tok.is_ws() && !raw_tok.is_empty();
+		     }).base();
   raw_pp_tokens repl_toks(it, end);
   _check_macro_repl(repl_toks.cbegin(), repl_toks.cend(), func_like,
 		    arg_names, report_fatal);
@@ -3074,14 +3072,10 @@ preprocessor::_parse_macro_signature
 			 const _report_fatal_at_raw_tok_type &report_fatal)
 {
   auto skip_ws = [&end](const decltype(end) it) {
-    if (it == end || !it->is_ws()) {
-      return it;
-    }
-    // No need to loop here:
-    // Macro definitions come in a single line and pp_tokenizer
-    // won't emit more than one consecutive whitespace.
-    assert(it + 1 == end || !(it + 1)->is_ws());
-    return it + 1;
+    return std::find_if(it, end,
+			[](const raw_pp_token &raw_tok) {
+			  return !raw_tok.is_ws() && !raw_tok.is_empty();
+			});
   };
 
   auto it = skip_ws(begin);
@@ -3157,7 +3151,8 @@ _check_macro_repl(const raw_pp_tokens::const_iterator begin,
   if (begin == end)
     return;
 
-  assert(!begin->is_ws() && !(end-1)->is_ws());
+  assert(!begin->is_ws() && !begin->is_empty() &&
+	 !(end-1)->is_ws() && !(end-1)->is_empty());
 
   if (begin->is_punctuator("##")) {
     throw report_fatal("## at beginning of macro replacement list", begin);
@@ -3172,7 +3167,7 @@ _check_macro_repl(const raw_pp_tokens::const_iterator begin,
     [](const raw_pp_token &tok) { return tok.is_punctuator("#"); };
 
   auto &&is_ws_pred =
-    [](const raw_pp_token &tok) { return tok.is_ws(); };
+    [](const raw_pp_token &tok) { return tok.is_ws() || tok.is_empty(); };
 
   auto it = begin;
   while (it != end) {

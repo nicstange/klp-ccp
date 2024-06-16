@@ -159,14 +159,13 @@ void pp_result::macro::_init_do_expand_args()
     };
 
   auto &&skip_ws =
-    [&](const raw_pp_tokens::const_iterator &it_repl) {
-      if (it_repl != _repl.cend() && it_repl->is_ws()) {
-	// No whitespace at beginning or end of replacement list.
-	assert(it_repl + 1 != _repl.cend());
-	// No multiple consecutive whitespace tokens in replacement
-	// list.
-	assert(!(it_repl + 1)->is_ws());
-	return it_repl + 1;
+    [&](raw_pp_tokens::const_iterator it_repl) {
+      // Continuation lines are represented as empty tokens in the
+      // replacement list and may be surrounded by whitespace tokens
+      // on both sides, so skip over sequences thereof.
+      while (it_repl != _repl.cend() &&
+	     (it_repl->is_ws() || it_repl->is_empty())) {
+	++it_repl;
       }
       return it_repl;
     };

@@ -59,9 +59,13 @@ namespace klp
 
 	char _read_next_char_raw();
 
-	char _read_next_char(range_in_file::loc_type &loc);
-	void _advance_to_next_char();
-	void _skip_next_char();
+	char _read_next_char();
+	void _advance_queue_to_next_char();
+	void _advance_queue_to_pos(const std::size_t new_queue_pos);
+
+	std::size_t _next_queued_non_continuation_pos(std::size_t pos)
+	  const noexcept;
+	bool _at_eof() const noexcept;
 
 	raw_pp_token _tokenize_string(const char delim,
 				      const bool delim_escapable,
@@ -77,9 +81,6 @@ namespace klp
 	buffer_type::const_iterator _buf_it;
 
 	range_in_file::loc_type _line_length;
-	range_in_file::loc_type _cur_loc;
-	range_in_file::loc_type _next_loc;
-	range_in_file::loc_type _next_next_loc;
 	range_in_file::loc_type _tok_loc;
 	enum class expect_qh_str
 	{
@@ -90,10 +91,17 @@ namespace klp
 	};
 	expect_qh_str _expect_qh_str;
 
-	char _pending;
-	char _cur;
-	char _next;
-	char _next_next;
+	char _pending[2];
+	// Only five look-ahead characters are needed (three "real"
+	// characters, interspersed with up to two continuation line
+	// markers (encoded as zero) inbetween, but a power of two
+	// enables more efficient ring buffer index wrapround. Two
+	// consecutive zeroes encode EOF.
+	static constexpr std::size_t _queue_capacity = 8;
+	char _queue[_queue_capacity];
+	range_in_file::loc_type _queue_locs[_queue_capacity];
+	range_in_file::loc_type _next_queue_loc;
+	std::size_t _queue_pos;
       };
     }
 
