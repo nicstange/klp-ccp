@@ -78,19 +78,28 @@ char _pp_tokenizer::_read_next_char_raw()
     }
     _buf = this->read_raw();
     _buf_it = _buf.cbegin();
-    if (_buf.empty())
+    if (_buf.empty()) {
+      if (_line_length) {
+	this->add_line(_line_length);
+	_line_length = 0;
+      }
       return 0;
+    }
+
+    auto prev = _buf.cbegin();
+    auto next = std::find(prev, _buf.cend(), '\n');
+    while (next != _buf.cend()) {
+      ++next;
+      _line_length += next - prev;
+      this->add_line(_line_length);
+      _line_length = 0;
+      prev = next;
+      next = std::find(prev, _buf.cend(), '\n');
+    }
+    _line_length += next - prev;
   }
 
-  const char c = static_cast<char>(*_buf_it++);
-  ++_line_length;
-
-  if (c == '\n') {
-    this->add_line(_line_length);
-    _line_length = 0;
-  }
-
-  return c;
+  return static_cast<char>(*_buf_it++);
 }
 
 char _pp_tokenizer::_read_next_char()
