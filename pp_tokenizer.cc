@@ -141,21 +141,29 @@ char _pp_tokenizer::_read_next_char()
   return !is_continuation_line ? c : 0;
 }
 
-void _pp_tokenizer::_advance_queue_to_next_char()
-{
-  const auto backfill_pos = _queue_pos;
-  ++_queue_pos;
-  _queue_pos &= _queue_capacity - 1;
-
-  _queue_locs[backfill_pos] = _next_queue_loc;
-  _queue[backfill_pos] = _read_next_char();
-}
-
 void _pp_tokenizer::_advance_queue_to_pos(const std::size_t new_queue_pos)
 {
-  const std::size_t n = (new_queue_pos - _queue_pos) & (_queue_capacity - 1);
-  for (std::size_t i = 0; i < n; ++i)
-    _advance_queue_to_next_char();
+  // With queue refilling in batches of the two queue halves,
+  // advancing by more than such a half is not possible.
+  assert(((new_queue_pos - _queue_pos) & (_queue_capacity - 1)) <=
+	 (_queue_capacity >> 1));
+  const auto old_pos = _queue_pos;
+  _queue_pos = new_queue_pos;
+  if ((old_pos ^ _queue_pos) & (_queue_capacity >> 1)) {
+    // Crossed into the other queue half. Refill the half just left.
+    const auto refill_begin_pos = old_pos & ~((_queue_capacity >> 1) - 1);
+    const auto refill_end_pos = refill_begin_pos + (_queue_capacity >> 1);
+    for (std::size_t refill_cur_pos = refill_begin_pos;
+	 refill_cur_pos != refill_end_pos;
+	 ++refill_cur_pos) {
+      _queue_locs[refill_cur_pos] = _next_queue_loc;
+      _queue[refill_cur_pos] = _read_next_char();
+    }
+
+    // When crossing a queue half boundary, wrapping _queue_pos
+    // might be needed (i.e. every other time).
+    _queue_pos &= _queue_capacity - 1;
+  }
 }
 
 std::size_t _pp_tokenizer::_next_queued_non_continuation_pos(std::size_t pos)
@@ -195,7 +203,7 @@ _tokenize_string(const range_in_file::loc_type begin_loc,
       _advance_queue_to_pos(_next_queued_non_continuation_pos(_queue_pos + 1));
       cur = _queue[_queue_pos];
     } else {
-      _advance_queue_to_next_char();
+      _advance_queue_to_pos(_queue_pos + 1);
       return raw_pp_token(tok_type, value,
 			  range_in_file(begin_loc, _queue_locs[_queue_pos]));
     }

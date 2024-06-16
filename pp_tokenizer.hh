@@ -60,7 +60,6 @@ namespace klp
 	char _read_next_char_raw();
 
 	char _read_next_char();
-	void _advance_queue_to_next_char();
 	void _advance_queue_to_pos(const std::size_t new_queue_pos);
 
 	std::size_t _next_queued_non_continuation_pos(std::size_t pos)
@@ -95,9 +94,12 @@ namespace klp
 	// Only five look-ahead characters are needed (three "real"
 	// characters, interspersed with up to two continuation line
 	// markers (encoded as zero) inbetween, but a power of two
-	// enables more efficient ring buffer index wrapround. Two
-	// consecutive zeroes encode EOF.
-	static constexpr std::size_t _queue_capacity = 8;
+	// enables more efficient ring buffer index wrapround.
+	// Make the queue at least twice as large as the next power of
+	// two, to enable batched refill whenever crossing into the
+	// other half.
+	// Two (or more) consecutive zeroes encode EOF.
+	static constexpr std::size_t _queue_capacity = 16;
 	char _queue[_queue_capacity];
 	range_in_file::loc_type _queue_locs[_queue_capacity];
 	range_in_file::loc_type _next_queue_loc;
