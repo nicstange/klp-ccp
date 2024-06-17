@@ -103,7 +103,7 @@ namespace klp
 	// two, to enable batched refill whenever crossing into the
 	// other half.
 	// Two (or more) consecutive zeroes encode EOF.
-	static constexpr unsigned int _queue_capacity_log2 = 4;
+	static constexpr unsigned int _queue_capacity_log2 = 5;
 	static constexpr unsigned int _queue_capacity =
 	  1u << _queue_capacity_log2;
 	char _queue[_queue_capacity];
