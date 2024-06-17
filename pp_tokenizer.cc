@@ -268,9 +268,11 @@ void _pp_tokenizer::_refill_queue_half(bool odd_half)
 void _pp_tokenizer::_advance_queue_to_pos(const unsigned int new_queue_pos)
 {
   // With queue refilling in batches of the two queue halves,
-  // advancing by more than such a half is not possible.
-  assert(((new_queue_pos - _queue_pos) & (_queue_capacity - 1)) <=
-	 (_queue_capacity >> 1));
+  // advancing over a whole half without ever visiting it here is not
+  // possible.
+  assert(((((new_queue_pos ^ _queue_pos) >> (_queue_capacity_log2 - 1)) & 1)
+	  != 0) ||
+	  new_queue_pos >= _queue_pos);
   const auto old_pos = _queue_pos;
   _queue_pos = new_queue_pos;
   if ((old_pos ^ _queue_pos) & (_queue_capacity >> 1)) {
@@ -281,6 +283,69 @@ void _pp_tokenizer::_advance_queue_to_pos(const unsigned int new_queue_pos)
     // might be needed (i.e. every other time).
     _queue_pos &= _queue_capacity - 1;
   }
+}
+
+unsigned int _pp_tokenizer::_cur_queue_window_end_pos_wrap() const noexcept
+{
+  // When in the first half, everything up to but including the last
+  // character from the second half may be consumed without an
+  // intermediate refill being required (moving _queue_pos from the
+  // first half to that position of the last character in the second
+  // half would still trigger a refill of the first half eventually.
+  // When in the second half, it's vice-versa.
+  const unsigned int in_odd = _queue_pos >> (_queue_capacity_log2 - 1);
+  return (_queue_capacity >> in_odd) - 1;
+}
+
+unsigned int _pp_tokenizer::_cur_queue_window_end_pos_nowrap() const noexcept
+{
+  // When in the first half, everything up to but including the last
+  // character from the second half may be consumed without an
+  // intermediate refill being required (moving _queue_pos from the
+  // first half to that position of the last character in the second
+  // half would still trigger a refill of the first half eventually).
+  // When in the second half, the search range in limited by
+  // wraparound.
+  const unsigned int in_even = 1 - (_queue_pos >> (_queue_capacity_log2 - 1));
+  return _queue_capacity - in_even;
+}
+
+unsigned int _pp_tokenizer::
+_cur_queue_window_end_pos_nowrap(unsigned int search_begin_pos) const noexcept
+{
+  search_begin_pos &= _queue_capacity - 1;
+  const unsigned int queue_pos_in_even =
+    1 - (_queue_pos >> (_queue_capacity_log2 - 1));
+  const unsigned int search_begin_pos_in_even =
+    1 - (search_begin_pos >> (_queue_capacity_log2 - 1));
+  // It is assumed that search_begin_pos comes after the current
+  // queue head, _queue_pos in ringbuffer order. So except if
+  // search_begin_pos wrapped around, the former is >= the latter.
+  assert(queue_pos_in_even ^ search_begin_pos_in_even ||
+	 _queue_pos <= search_begin_pos);
+  // The queue refilling logic requires that the queue gets advanced
+  // to some byte in the half _queue_pos is not currently in before
+  // re-entering the currently active half. This, and ringbuffer
+  // wraparound, limits the search range. The table is:
+  // queue_pos_in_even search_begin_pos_in_even    search range end.
+  // 0                 0                           _queue_capacity
+  // 0                 1                           (_queue_capacity >> 1) - 1
+  // 1                 0                           _queue_capacity - 1
+  // 1                 1                           _queue_capacity - 1
+  const unsigned int any_in_even =
+    queue_pos_in_even | search_begin_pos_in_even;
+  // Instead of computing
+  // _queue_capacity >> (search_begin_pos_in_even & ~queue_pos_in_even),
+  // enable subexpression reuse by shifting to the
+  // left by one if any_in_even and undo if queue_pos_in_even.
+  // To reduce data dependency paths, reverse that order of shifts,
+  // so that the shift left by queue_pos_in_even can be computed
+  // when any_in_even isn't available yet.
+  assert(any_in_even - queue_pos_in_even ==
+	 (search_begin_pos_in_even & ~queue_pos_in_even));
+  static_assert((_queue_capacity << 1) >> 1  == _queue_capacity,
+		"_queue_capacity's width exceeded in computation");
+  return ((_queue_capacity << queue_pos_in_even) >> any_in_even) - any_in_even;
 }
 
 unsigned int _pp_tokenizer::_next_queued_non_continuation_pos(unsigned int pos)
@@ -309,19 +374,46 @@ _tokenize_string(const range_in_file::loc_type begin_loc,
 
   _advance_queue_to_pos(_next_queued_non_continuation_pos(_queue_pos));
   char cur = _queue[_queue_pos];
+  const char needle[] = { delim, '\0', delim_escapable ? '\\' : '\0' };
   while(cur) {
     if (cur != delim || (delim_escapable && in_escape)) {
-      if (in_escape) {
-	in_escape = false;
+      assert(_queue_pos + 1 != _queue_capacity ||
+	     _cur_queue_window_end_pos_nowrap() == _queue_capacity);
+      const auto next_poi_pos =
+	(std::find_first_of(&_queue[_queue_pos + 1],
+			    &_queue[_cur_queue_window_end_pos_nowrap()],
+			    &needle[0],
+			    &needle[3])
+	 - &_queue[0]);
+      in_escape = !in_escape && (cur == '\\') && next_poi_pos == _queue_pos + 1;
+      if (next_poi_pos != _queue_capacity) {
+	value.append(&_queue[_queue_pos], &_queue[next_poi_pos]);
+	_advance_queue_to_pos(next_poi_pos);
       } else {
-	in_escape = (cur == '\\');
+	// The search stopped at queue ringbuffer wraparound. Continue
+	// the there to minimize allocations.
+	const unsigned int next_poi_pos_wrapped =
+	  (std::find_first_of(&_queue[0],
+			      &_queue[_cur_queue_window_end_pos_wrap()],
+			      &needle[0],
+			      &needle[3])
+	   - &_queue[0]);
+	in_escape &= next_poi_pos_wrapped == 0;
+	value.reserve(value.size() +
+		      (next_poi_pos - _queue_pos) +
+		      next_poi_pos_wrapped);
+	value.append(&_queue[_queue_pos], &_queue[next_poi_pos]);
+	value.append(&_queue[0], &_queue[next_poi_pos_wrapped]);
+	_advance_queue_to_pos(next_poi_pos_wrapped);
       }
-      value.push_back(cur);
-      _advance_queue_to_pos(_next_queued_non_continuation_pos(_queue_pos + 1));
       cur = _queue[_queue_pos];
+      if (!cur) {
+	_advance_queue_to_pos(_next_queued_non_continuation_pos(_queue_pos));
+	cur = _queue[_queue_pos];
+      }
     } else {
       _advance_queue_to_pos(_queue_pos + 1);
-      return raw_pp_token(tok_type, value,
+      return raw_pp_token(tok_type, std::move(value),
 			  range_in_file(begin_loc, _queue_locs[_queue_pos]));
     }
   }
@@ -467,35 +559,58 @@ raw_pp_token _pp_tokenizer::_tokenize_pp_number()
     const auto cur_pos = _next_queued_non_continuation_pos(_queue_pos);
     const char cur = _queue[cur_pos];
     switch (cur) {
-    case 'e':
-    case 'E':
-    case 'p':
-    case 'P':
-      {
-	const auto next_pos = _next_queued_non_continuation_pos(cur_pos + 1);
-	const char next = _queue[next_pos];
-	if (next == '+' || next == '-') {
-	  value.push_back(cur);
-	  value.push_back(next);
-	  _advance_queue_to_pos(next_pos + 1);
-	} else {
-	  value.push_back(cur);
-	  _advance_queue_to_pos(cur_pos + 1);
-	}
+    case '+':
+    case '-':
+      if (!value.empty() &&
+	  (value.back() == 'e' || value.back() == 'E' ||
+	   value.back() == 'p' || value.back() == 'P')) {
+	_advance_queue_to_pos(cur_pos + 1);
+	value.push_back(cur);
+      } else {
+	done = true;
       }
       break;
 
     case '.':
     case '0' ... '9':
     case '_':
-    case 'a' ... 'd':
-    case 'f' ... 'o':
-    case 'q' ... 'z':
-    case 'A' ... 'D':
-    case 'F' ... 'O':
-    case 'Q' ... 'Z':
-      value.push_back(cur);
-      _advance_queue_to_pos(cur_pos + 1);
+    case 'a' ... 'z':
+    case 'A' ... 'Z':
+      {
+	const auto &not_is_pp_number_char =
+	  [](const char c) {
+	    return
+	      !(c == '.' || c == '_' ||
+		('0' <= c && c <= '9') ||
+		('a' <= c && c <= 'z') ||
+		('A' <= c && c <= 'Z'));
+	  };
+
+	assert(_cur_queue_window_end_pos_nowrap(cur_pos) >= cur_pos + 1);
+	const auto next_poi_pos =
+	  (std::find_if(&_queue[cur_pos + 1],
+			&_queue[_cur_queue_window_end_pos_nowrap(cur_pos)],
+			not_is_pp_number_char)
+	   - &_queue[0]);
+	if (next_poi_pos != _queue_capacity) {
+	  value.append(&_queue[cur_pos], &_queue[next_poi_pos]);
+	  _advance_queue_to_pos(next_poi_pos);
+	} else {
+	  // The search stopped at queue ringbuffer wraparound. Continue
+	  // the there to minimize allocations.
+	  const unsigned int next_poi_pos_wrapped =
+	    (std::find_if(&_queue[0],
+			  &_queue[_cur_queue_window_end_pos_wrap()],
+			  not_is_pp_number_char)
+	     - &_queue[0]);
+	  value.reserve(value.size() +
+			(next_poi_pos - cur_pos) +
+			next_poi_pos_wrapped);
+	  value.append(&_queue[cur_pos], &_queue[next_poi_pos]);
+	  value.append(&_queue[0], &_queue[next_poi_pos_wrapped]);
+	  _advance_queue_to_pos(next_poi_pos_wrapped);
+	}
+      }
       break;
 
     default:
@@ -503,7 +618,7 @@ raw_pp_token _pp_tokenizer::_tokenize_pp_number()
     }
   }
 
-  return raw_pp_token(pp_token::type::pp_number, value,
+  return raw_pp_token(pp_token::type::pp_number, std::move(value),
 		      range_in_file(begin_loc, _queue_locs[_queue_pos]));
 }
 
@@ -523,8 +638,41 @@ raw_pp_token _pp_tokenizer::_tokenize_id()
     case 'a' ... 'z':
     case 'A' ... 'Z':
     case '0' ... '9':
-      value.push_back(cur);
-      _advance_queue_to_pos(cur_pos + 1);
+      {
+	const auto &not_is_id_char =
+	  [](const char c) {
+	    return
+	      !(c == '_' ||
+		('0' <= c && c <= '9') ||
+		('a' <= c && c <= 'z') ||
+		('A' <= c && c <= 'Z'));
+	  };
+
+	assert(_cur_queue_window_end_pos_nowrap(cur_pos) >= cur_pos + 1);
+	const auto next_poi_pos =
+	  (std::find_if(&_queue[cur_pos + 1],
+			&_queue[_cur_queue_window_end_pos_nowrap(cur_pos)],
+			not_is_id_char)
+	   - &_queue[0]);
+	if (next_poi_pos != _queue_capacity) {
+	  value.append(&_queue[cur_pos], &_queue[next_poi_pos]);
+	  _advance_queue_to_pos(next_poi_pos);
+	} else {
+	  // The search stopped at queue ringbuffer wraparound. Continue
+	  // the there to minimize allocations.
+	  const unsigned int next_poi_pos_wrapped =
+	    (std::find_if(&_queue[0],
+			  &_queue[_cur_queue_window_end_pos_wrap()],
+			  not_is_id_char)
+	     - &_queue[0]);
+	  value.reserve(value.size() +
+			(next_poi_pos - cur_pos) +
+			next_poi_pos_wrapped);
+	  value.append(&_queue[cur_pos], &_queue[next_poi_pos]);
+	  value.append(&_queue[0], &_queue[next_poi_pos_wrapped]);
+	  _advance_queue_to_pos(next_poi_pos_wrapped);
+	}
+      }
       break;
 
     default:
@@ -532,7 +680,7 @@ raw_pp_token _pp_tokenizer::_tokenize_id()
     }
   }
 
-  return raw_pp_token(pp_token::type::id, value,
+  return raw_pp_token(pp_token::type::id, std::move(value),
 		      range_in_file(begin_loc, _queue_locs[_queue_pos]));
 }
 
@@ -547,22 +695,35 @@ std::size_t _pp_tokenizer::_skip_c_comment(const std::size_t n_trailing_spaces)
      1);
   _advance_queue_to_pos(next_pos + 1);
 
+  const char needle[] = { '\0', '\n', '*' };
   while (true) {
-    const auto cur = _queue[_queue_pos];
-    if (cur == '*') {
-      const auto next_pos = _next_queued_non_continuation_pos(_queue_pos + 1);
-      if (_queue[next_pos] == '/') {
-	n_chars_in_last_line =
-	  ((next_pos == ((_queue_pos + 1) & (_queue_capacity - 1))) ?
-	   n_trailing_spaces + 2 :
-	   1);
-	_advance_queue_to_pos(next_pos + 1);
-	break;
-      }
-    }
+    const auto next_poi_pos =
+      (std::find_first_of(&_queue[_queue_pos],
+			  &_queue[_cur_queue_window_end_pos_nowrap()],
+			  &needle[0],
+			  &needle[3])
+       - &_queue[0]);
+    n_chars_in_last_line += next_poi_pos - _queue_pos;
+    _advance_queue_to_pos(next_poi_pos);
 
-    ++n_chars_in_last_line;
-    if (cur == '\n' || cur == 0) {
+    const auto cur = _queue[_queue_pos];
+    if (cur != '\n' && cur != 0) {
+      if (cur == '*') {
+	const auto next_pos = _next_queued_non_continuation_pos(_queue_pos + 1);
+	if (_queue[next_pos] == '/') {
+	  n_chars_in_last_line =
+	    ((next_pos == ((_queue_pos + 1) & (_queue_capacity - 1))) ?
+	     n_chars_in_last_line + 2 :
+	     1);
+	  _advance_queue_to_pos(next_pos + 1);
+	  break;
+	}
+	// Either a '*' not followed by a '/' or the end of the
+	// current search window had been hit above.
+	++n_chars_in_last_line;
+      }
+    } else {
+      assert(cur == '\n' || cur == 0);
       if (cur == 0 && _at_eof()) {
 	throw this->report_fatal("EOF within C-style comment",
 				 _queue_locs[_queue_pos]);
@@ -582,13 +743,20 @@ void _pp_tokenizer::_skip_cpp_comment()
   assert(_queue[next_pos] == '/');
   _advance_queue_to_pos(next_pos + 1);
 
+  const char needle[] = { '\0', '\n' };
   while(_queue[_queue_pos] != '\n') {
+    const auto next_poi_pos =
+      (std::find_first_of(&_queue[_queue_pos],
+			  &_queue[_cur_queue_window_end_pos_nowrap()],
+			  &needle[0],
+			  &needle[2])
+       - &_queue[0]);
+    _advance_queue_to_pos(next_poi_pos);
+
     if (!_queue[_queue_pos] && _at_eof()) {
       this->report_warning("EOF within C++-style comment",
 			   _queue_locs[_queue_pos]);
     }
-
-    _advance_queue_to_pos(_queue_pos + 1);
   }
 }
 
@@ -624,6 +792,7 @@ raw_pp_token _pp_tokenizer::_tokenize_ws()
 	   (cur == '/' && (next == '*' || next == '/')));
   }
   const auto begin_loc = _queue_locs[_queue_pos];
+  bool multispaces = false;
   while (!done) {
     cur = _queue[_queue_pos];
     switch (cur) {
@@ -659,8 +828,16 @@ raw_pp_token _pp_tokenizer::_tokenize_ws()
     case '\t':
     case '\v':
     case '\f':
-      ++n_spaces;
-	  _advance_queue_to_pos(_queue_pos + 1);
+      {
+	assert(_queue_pos + 1 <= _cur_queue_window_end_pos_nowrap());
+	const auto next_poi_pos =
+	  (std::find_if(&_queue[_queue_pos + 1],
+			&_queue[_cur_queue_window_end_pos_nowrap()],
+			[](const char c) { return c != ' ' && c != '\t'; })
+	   - &_queue[0]);
+	n_spaces += next_poi_pos - _queue_pos;
+	_advance_queue_to_pos(next_poi_pos);
+      }
       break;
 
     default:

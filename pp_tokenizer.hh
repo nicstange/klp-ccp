@@ -60,6 +60,11 @@ namespace klp
 	void _refill_buf();
 	void _refill_queue_half(const bool odd_half);
 	void _advance_queue_to_pos(const unsigned int new_queue_pos);
+	unsigned int _cur_queue_window_end_pos_wrap() const noexcept;
+	unsigned int _cur_queue_window_end_pos_nowrap() const noexcept;
+	unsigned int
+	_cur_queue_window_end_pos_nowrap(unsigned int search_begin_pos)
+	  const noexcept;
 
 	unsigned int _next_queued_non_continuation_pos(unsigned int pos)
 	  const noexcept;
