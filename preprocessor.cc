@@ -247,8 +247,7 @@ void preprocessor::register_predefined_macro
     throw report_fatal("garbage after macro signature");
   }
 
-  _check_macro_repl(skip_ws(repl_toks.cbegin(), repl_toks.cend()),
-		    repl_toks.cend(),
+  _check_macro_repl(repl_toks.cbegin(), repl_toks.cend(),
 		    func_like, arg_names,
 		    [&](const std::string &msg,
 			const raw_pp_tokens::const_iterator&) {
@@ -1754,13 +1753,10 @@ _expand_one(_macro_expansion_forest::_rescan_macro_invocation &rmi,
   result.emplace_back(pp_token::type::empty, std::string{});
   out_fragments._add_fragment(out_fragment::empty_tag{});
   bool last_was_ws_or_empty = true;
-  for (raw_pp_tokens::size_type repl_pos = 0, next_repl_pos;
+  for (raw_pp_tokens::size_type repl_pos = skip_ws(0), next_repl_pos;
        repl_pos != repl_toks.size(); repl_pos = next_repl_pos) {
     next_repl_pos = advance_repl_pos(repl_pos);
     auto next_no_ws_repl_pos = skip_ws(next_repl_pos);
-    assert(next_repl_pos == repl_toks.size() ||
-	   next_no_ws_repl_pos != repl_toks.size());
-
     if (next_no_ws_repl_pos != repl_toks.size() &&
 	repl_toks[next_no_ws_repl_pos].is_punctuator("##")) {
       auto next_concat_tok_repl_pos = skip_ws(next_no_ws_repl_pos + 1);
@@ -3045,20 +3041,17 @@ _handle_macro_definition(const raw_pp_tokens_range &directive_range)
     _remarks.add(remark);
   }
 
-  it = skip_ws(it);
-  // Strip whitespace + empties at the end of the replacement list.
-  end = std::find_if(std::make_reverse_iterator(end),
-		     std::make_reverse_iterator(it),
-		     [](const raw_pp_token &raw_tok) {
-		       return !raw_tok.is_ws() && !raw_tok.is_empty();
-		     }).base();
-  raw_pp_tokens repl_toks(it, end);
+  raw_pp_tokens repl_toks{it, end};
   _check_macro_repl(repl_toks.cbegin(), repl_toks.cend(), func_like,
 		    arg_names, report_fatal);
+  const raw_pp_tokens_range repl_range{
+    static_cast<pp_token_index>(it - _pp_result->get_raw_tokens().begin()),
+    static_cast<pp_token_index>(end - _pp_result->get_raw_tokens().begin())
+  };
 
   return _pp_result->_add_macro(name, func_like, variadic,
 				std::move(arg_names), std::move(repl_toks),
-				directive_range);
+				repl_range, directive_range);
 }
 
 std::tuple<raw_pp_tokens::const_iterator,
@@ -3142,12 +3135,23 @@ preprocessor::_parse_macro_signature
 }
 
 void preprocessor::
-_check_macro_repl(const raw_pp_tokens::const_iterator begin,
-		  const raw_pp_tokens::const_iterator end,
+_check_macro_repl(raw_pp_tokens::const_iterator begin,
+		  raw_pp_tokens::const_iterator end,
 		  const bool func_like,
 		  const std::vector<std::string> &arg_names,
 		  const _report_fatal_at_raw_tok_type &report_fatal)
 {
+  auto &&is_ws_pred =
+    [](const raw_pp_token &tok) { return tok.is_ws() || tok.is_empty(); };
+
+  auto &&not_is_ws_pred =
+    [&](const raw_pp_token &tok) { return !is_ws_pred(tok); };
+
+  begin = std::find_if(begin, end, not_is_ws_pred);
+  end = (std::find_if(std::make_reverse_iterator(end),
+		     std::make_reverse_iterator(begin),
+		     not_is_ws_pred)
+	 .base());
   if (begin == end)
     return;
 
@@ -3165,9 +3169,6 @@ _check_macro_repl(const raw_pp_tokens::const_iterator begin,
 
   auto &&is_stringify_op_pred =
     [](const raw_pp_token &tok) { return tok.is_punctuator("#"); };
-
-  auto &&is_ws_pred =
-    [](const raw_pp_token &tok) { return tok.is_ws() || tok.is_empty(); };
 
   auto it = begin;
   while (it != end) {
