@@ -968,11 +968,12 @@ operator--(int) noexcept
 expansion_forest::rescan_macro_invocation::const_src_iterator::
 const_src_iterator() noexcept
   : _forest(nullptr), _node(_forest_nodes::size_type::invalid()),
-    _remaining_src_length(0), _src_begin(0)
+    _remaining_src_length(0), _src_begin(0), _cross_arg_tree_roots(false)
 {}
 
 expansion_forest::rescan_macro_invocation::const_src_iterator::
 const_src_iterator(const _rescan_macro_invocation_ref &node,
+		   const bool cross_arg_tree_roots,
 		   const _begin_tag&) noexcept
   : _forest{&node.get_forest()},
     _node{!node.deref().is_arg_tree_root() ?
@@ -983,16 +984,19 @@ const_src_iterator(const _rescan_macro_invocation_ref &node,
       (!node.deref().is_arg_tree_root() ?
        node.deref().get_source_range().begin :
        0)
-    }
+    },
+    _cross_arg_tree_roots{cross_arg_tree_roots}
 {
   _advance_node_to_emitting();
 }
 
 expansion_forest::rescan_macro_invocation::const_src_iterator::
 const_src_iterator(const _rescan_macro_invocation_ref &node,
+		   const bool cross_arg_tree_roots,
 		   const _end_tag&) noexcept
   : _forest{&node.get_forest()}, _node{_forest_nodes::size_type::invalid()},
-    _remaining_src_length{0}, _src_begin{0}
+    _remaining_src_length{0}, _src_begin{0},
+    _cross_arg_tree_roots{cross_arg_tree_roots}
 {}
 
 bool expansion_forest::rescan_macro_invocation::const_src_iterator::
@@ -1090,6 +1094,10 @@ _advance_node_to_emitting() noexcept
       _src_begin -= node.out_length();
       _src_begin += node.get_source_range().end;
       _node = node.get_rescan_parent();
+    } else if (!_cross_arg_tree_roots) {
+      assert(node.out_length() > _src_begin);
+      assert(node.out_length() >= _src_begin + _remaining_src_length);
+      break;
     } else {
       // The offset of the (unexpanded) argument's beginning is relative
       // to the owner's rescan parent's output.
@@ -1142,16 +1150,21 @@ operator rescan_output_segment() const noexcept
 
 
 expansion_forest::rescan_macro_invocation::const_src_iterator
-expansion_forest::rescan_macro_invocation::src_begin() const noexcept
+expansion_forest::rescan_macro_invocation::
+src_begin(const bool cross_arg_tree_roots) const noexcept
 {
-  return const_src_iterator{_ref, const_src_iterator::_begin_tag{}
+  return const_src_iterator{
+    _ref, cross_arg_tree_roots, const_src_iterator::_begin_tag{}
   };
 }
 
 expansion_forest::rescan_macro_invocation::const_src_iterator
-expansion_forest::rescan_macro_invocation::src_end() const noexcept
+expansion_forest::
+rescan_macro_invocation::src_end(const bool cross_arg_tree_roots) const noexcept
 {
-  return const_src_iterator{_ref, const_src_iterator::_end_tag{}};
+  return const_src_iterator{
+    _ref, cross_arg_tree_roots, const_src_iterator::_end_tag{}
+  };
 }
 
 bool expansion_forest::rescan_macro_invocation::

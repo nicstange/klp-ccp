@@ -1295,7 +1295,6 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 	 _macro_expansion_forest::nodes_size_type::invalid());
   auto emitting_node = forest[emitting_node_index];
   while (!emitting_node.is_nil_node()) {
-
     if (!emitting_node.is_arg_tree_root()) {
       if (&emitting_node.get_macro() == &m)
 	return true;
@@ -1307,7 +1306,7 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
       src_frag.fragment
 	(wrap_callables<no_default_action>
 	 ([&](const rescan_out_fragment::repl_tag&) {
-	   const auto &src = *emitting_node.src_begin();
+	   const auto &src = *emitting_node.src_begin(false);
 	   id_tok_index = src.get_out_range_in_emitting_node().begin;
 	   emitting_node = src.get_emitting_node();
 	  },
@@ -1330,7 +1329,7 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 	  },
 	  [&](const rescan_out_fragment::concat_tag&,
 	      const rescan_out_fragment::concat_sequence&) {
-	    const auto &src = *emitting_node.src_begin();
+	    const auto &src = *emitting_node.src_begin(false);
 	    id_tok_index = src.get_out_range_in_emitting_node().begin;
 	    emitting_node = src.get_emitting_node();
 	  },
@@ -1348,7 +1347,7 @@ bool preprocessor::_macro_is_in_id_tok_expansion_history
 	  }));
 
     } else {
-      auto it_arg_src_seg = emitting_node.src_begin();
+      auto it_arg_src_seg = emitting_node.src_begin(true);
       id_tok_index = it_arg_src_seg.skip_src_distance(id_tok_index);
       const auto &arg_src_seg = *it_arg_src_seg;
       id_tok_index += arg_src_seg.get_out_range_in_emitting_node().begin;
@@ -2388,14 +2387,14 @@ _find_passed_through_arg_tokens(const pp_result &pp_result,
 	// where these came from -- either from some other (rescanned)
 	// macro expansion (of the arg owner's rescan tree ancestors),
 	// or directly from the input file.
-	auto it_src = cur_out_seg.get_emitting_node().src_begin();
+	auto it_src = cur_out_seg.get_emitting_node().src_begin(true);
 	auto offset_in_src_segment =
 	  it_src.skip_src_distance
 	    (cur_out_seg.get_out_range_in_emitting_node().begin);
 	auto remaining_src_length =
 	  cur_out_seg.get_out_range_in_emitting_node().length();
 	while (remaining_src_length != 0) {
-	  assert(it_src != cur_out_seg.get_emitting_node().src_end());
+	  assert(it_src != cur_out_seg.get_emitting_node().src_end(true));
 	  auto cur_src_seg =
 	    ((*it_src).crop_relative
 	     (rescan_macro_invocation::output::tokens_range{
@@ -2533,7 +2532,7 @@ _find_non_passed_through_arg_tokens(const pp_result &pp_result,
 	      break;
 	    }
 	  } else {
-	    auto it_arg_src = seg.get_emitting_node().src_begin();
+	    auto it_arg_src = seg.get_emitting_node().src_begin(true);
 	    const auto offset_in_arg_src_seg =
 	      it_arg_src.skip_src_distance
 		(seg.get_out_range_in_emitting_node().begin);

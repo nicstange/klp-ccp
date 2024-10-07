@@ -782,9 +782,11 @@ namespace klp
 	      struct _end_tag{};
 
 	      const_src_iterator(const _rescan_macro_invocation_ref &node,
+				 const bool cross_arg_tree_roots,
 				 const _begin_tag&) noexcept;
 
 	      const_src_iterator(const _rescan_macro_invocation_ref &node,
+				 const bool cross_arg_tree_roots,
 				 const _end_tag&) noexcept;
 
 	      void _advance_node_to_emitting() noexcept;
@@ -795,10 +797,13 @@ namespace klp
 	      _forest_nodes::size_type _node;
 	      std::size_t _remaining_src_length;
 	      std::size_t _src_begin;
+	      bool _cross_arg_tree_roots;
 	    }; // class const_src_iterator
 
-	    const_src_iterator src_begin() const noexcept;
-	    const_src_iterator src_end() const noexcept;
+	    const_src_iterator src_begin(const bool cross_arg_tree_roots)
+	      const noexcept;
+	    const_src_iterator src_end(const bool cross_arg_tree_roots)
+	      const noexcept;
 
 	    class output
 	    {
