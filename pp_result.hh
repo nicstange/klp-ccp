@@ -148,6 +148,9 @@ namespace klp
 	const raw_pp_tokens& get_repl() const noexcept
 	{ return _repl; }
 
+	const raw_pp_tokens_range& get_repl_range() const noexcept
+	{ return _repl_range; }
+
       private:
 	friend class pp_result;
 
@@ -156,6 +159,7 @@ namespace klp
 	      const bool variadic,
 	      std::vector<std::string> &&arg_names,
 	      raw_pp_tokens &&repl,
+	      const raw_pp_tokens_range &repl_range,
 	      const raw_pp_tokens_range &directive_range);
 
 	macro(const std::string &name,
@@ -196,6 +200,7 @@ namespace klp
 	std::string _name;
 	std::vector<std::string> _arg_names;
 	raw_pp_tokens _repl;
+	raw_pp_tokens_range _repl_range;
 	_origin _o;
 	union
 	{
@@ -2594,6 +2599,7 @@ namespace klp
 			      const bool variadic,
 			      std::vector<std::string> &&arg_names,
 			      raw_pp_tokens &&repl,
+			      const raw_pp_tokens_range &repl_range,
 			      const raw_pp_tokens_range &directive_range);
 
       const macro& _add_macro(const std::string &name,

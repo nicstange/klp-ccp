@@ -39,9 +39,11 @@ pp_result::macro::macro(const std::string &name,
 			const bool variadic,
 			std::vector<std::string> &&arg_names,
 			raw_pp_tokens &&repl,
+			const raw_pp_tokens_range &repl_range,
 			const raw_pp_tokens_range &directive_range)
   : _name(name), _arg_names(std::move(arg_names)),
     _repl(std::move(repl)),
+    _repl_range(repl_range),
     _o(_origin::o_source),
     _directive_range(directive_range),
     _func_like(func_like),
@@ -3741,12 +3743,13 @@ _add_macro(const std::string &name,
 	   const bool variadic,
 	   std::vector<std::string> &&arg_names,
 	   raw_pp_tokens &&repl,
+	   const raw_pp_tokens_range &repl_range,
 	   const raw_pp_tokens_range &directive_range)
 {
   _macros.push_back(std::unique_ptr<const macro>{
 			new macro{name, func_like, variadic,
 				  std::move(arg_names), std::move(repl),
-				  directive_range}});
+				  repl_range, directive_range}});
   return *_macros.back();
 }
 
