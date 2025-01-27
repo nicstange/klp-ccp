@@ -1881,6 +1881,15 @@ skip_out_distance(const std::size_t distance)
 }
 
 std::size_t expansion_forest::rescan_subtree::const_final_out_iterator::
+depth() const noexcept
+{
+  // The depth of the current node in the expansion tree is happens to
+  // equal the stack size (minus one to make it zero based).
+  assert(!_consumed_out_lengths_stack.empty());
+  return _consumed_out_lengths_stack.size() - 1;
+}
+
+std::size_t expansion_forest::rescan_subtree::const_final_out_iterator::
 _cur_out_segment_length() const noexcept
 {
   std::size_t out_segment_end;

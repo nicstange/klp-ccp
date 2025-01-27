@@ -1361,6 +1361,8 @@ namespace klp
 
 	      std::size_t skip_out_distance(const std::size_t distance);
 
+	      std::size_t depth() const noexcept;
+
 	    private:
 	      friend class rescan_subtree;
 
