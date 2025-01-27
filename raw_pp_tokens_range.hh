@@ -63,6 +63,11 @@ namespace klp
       bool is_contained_in(const raw_pp_tokens_range &r) const noexcept
       { return this->begin >= r.begin && this->end <= r.end; }
 
+      bool overlaps_with(const raw_pp_tokens_range &r) const noexcept
+      {
+	return this->end > r.begin && this->begin < r.end;
+      }
+
       raw_pp_tokens_range crop(const raw_pp_tokens_range &to) const noexcept
       {
 	raw_pp_tokens_range cropped {
