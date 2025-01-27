@@ -1246,6 +1246,11 @@ get_arg_tree(const std::size_t arg_index) const noexcept {
   };
 }
 
+const expansion_forest::rescan_macro_invocation::output&
+expansion_forest::rescan_macro_invocation::get_output() const noexcept
+{
+  return _ref.deref().get_output();
+}
 
 expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
 repl_ref() noexcept

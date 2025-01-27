@@ -1158,6 +1158,8 @@ namespace klp
 	    const rescan_subtree get_arg_tree(const std::size_t arg_index)
 	      const noexcept;
 
+	    const output& get_output() const noexcept;
+
 	  private:
 	    friend class expansion_forest;
 
@@ -1268,6 +1270,9 @@ namespace klp
 	    { return _nargs; }
 
 	    const macro& get_macro() const noexcept;
+
+	    const rescan_macro_invocation::output& get_output() const noexcept
+	    { return _output; }
 
 	  private:
 	    friend class expansion_forest;
