@@ -780,6 +780,9 @@ namespace klp
 	      std::size_t skip_src_distance(const std::size_t distance)
 		noexcept;
 
+	      std::size_t rescan_tree_distance() const noexcept
+	      { return _rescan_tree_distance; }
+
 	    private:
 	      friend class rescan_macro_invocation;
 
@@ -802,6 +805,7 @@ namespace klp
 	      _forest_nodes::size_type _node;
 	      std::size_t _remaining_src_length;
 	      std::size_t _src_begin;
+	      std::size_t _rescan_tree_distance;
 	      bool _cross_arg_tree_roots;
 	    }; // class const_src_iterator
 

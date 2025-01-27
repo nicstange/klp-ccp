@@ -970,7 +970,9 @@ operator--(int) noexcept
 expansion_forest::rescan_macro_invocation::const_src_iterator::
 const_src_iterator() noexcept
   : _forest(nullptr), _node(_forest_nodes::size_type::invalid()),
-    _remaining_src_length(0), _src_begin(0), _cross_arg_tree_roots(false)
+    _remaining_src_length(0), _src_begin(0),
+    _rescan_tree_distance{std::numeric_limits<std::size_t>::max()},
+    _cross_arg_tree_roots(false)
 {}
 
 expansion_forest::rescan_macro_invocation::const_src_iterator::
@@ -987,6 +989,9 @@ const_src_iterator(const _rescan_macro_invocation_ref &node,
        node.deref().get_source_range().begin :
        0)
     },
+    _rescan_tree_distance{
+      !node.deref().is_arg_tree_root() ? static_cast<std::size_t>(1) : 0
+    },
     _cross_arg_tree_roots{cross_arg_tree_roots}
 {
   _advance_node_to_emitting();
@@ -998,6 +1003,7 @@ const_src_iterator(const _rescan_macro_invocation_ref &node,
 		   const _end_tag&) noexcept
   : _forest{&node.get_forest()}, _node{_forest_nodes::size_type::invalid()},
     _remaining_src_length{0}, _src_begin{0},
+    _rescan_tree_distance{std::numeric_limits<std::size_t>::max()},
     _cross_arg_tree_roots{cross_arg_tree_roots}
 {}
 
@@ -1096,6 +1102,7 @@ _advance_node_to_emitting() noexcept
       _src_begin -= node.out_length();
       _src_begin += node.get_source_range().end;
       _node = node.get_rescan_parent();
+      ++_rescan_tree_distance;
     } else if (!_cross_arg_tree_roots) {
       assert(node.out_length() > _src_begin);
       assert(node.out_length() >= _src_begin + _remaining_src_length);
