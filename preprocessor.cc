@@ -2190,10 +2190,26 @@ _concat(pp_token &&tok1, pp_token &&tok2,
     _remarks.add(remark);
     throw pp_except(remark);
   } else if(tok1.get_type() == pp_token::type::chr ||
-	    tok1.get_type() == pp_token::type::wchr) {
+	    tok1.get_type() == pp_token::type::wchr ||
+	    tok1.get_type() == pp_token::type::uchr16 ||
+	    tok1.get_type() == pp_token::type::uchr32) {
     code_remark remark
       (code_remark::severity::fatal,
        "can't concatenate character constants",
+       _raw_pp_tokens_range_to_source(invocation_range),
+       _raw_pp_tokens_range_to_range_in_file(invocation_range));
+    _remarks.add(remark);
+    throw pp_except(remark);
+  } else if (tok1.get_type() == pp_token::type::str ||
+	     tok1.get_type() == pp_token::type::wstr ||
+	     tok1.get_type() == pp_token::type::ustr8 ||
+	     tok1.get_type() == pp_token::type::ustr16 ||
+	     tok1.get_type() == pp_token::type::ustr32 ||
+	     tok1.get_type() == pp_token::type::qstr ||
+	     tok1.get_type() == pp_token::type::hstr) {
+    code_remark remark
+      (code_remark::severity::fatal,
+       "can't concatenate string literals",
        _raw_pp_tokens_range_to_source(invocation_range),
        _raw_pp_tokens_range_to_range_in_file(invocation_range));
     _remarks.add(remark);
