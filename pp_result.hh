@@ -820,6 +820,11 @@ namespace klp
 	      class tokens_range
 	      {
 	      public:
+		tokens_range() noexcept;
+
+		tokens_range(const std::size_t _begin, const std::size_t _end)
+		  noexcept;
+
 		bool operator==(const tokens_range &rhs) const noexcept;
 
 		bool operator!=(const tokens_range &rhs) const noexcept
@@ -939,6 +944,7 @@ namespace klp
 
 		  private:
 		    friend class _concat_builder;
+		    friend class concat_sequence;
 
 		    component(repl_ref &&repl, const repl_tag&) noexcept;
 
@@ -962,11 +968,167 @@ namespace klp
 		    };
 		  }; // class component
 
-
 		private:
 		  using _components_container_type = std::vector<component>;
 
 		public:
+		  class output_fragment
+		  {
+		  public:
+		    using repl_ref =
+		      rescan_macro_invocation::output::fragment::repl_ref;
+		    using arg_ref =
+		      rescan_macro_invocation::output::fragment::arg_ref;
+
+		    enum class kind
+		    {
+		      concatenated_tokens,
+		      arg_tokens,
+		      stringification,
+		      conditional_comma,
+		    };
+
+		    class concatenated_tokens
+		    {
+		    public:
+		      class concatenated_token_origin
+		      {
+		      public:
+			enum class origin
+			  {
+			    repl,
+			    arg,
+			  };
+
+			struct repl_token
+			{
+			  std::size_t concatenated_repl_token_index;
+			};
+
+			struct arg_token
+			{
+			  arg_ref arg;
+			  std::size_t arg_ref_repl_token_index;
+			  std::size_t concatenated_arg_token_index;
+			};
+
+			concatenated_token_origin
+			(const repl_token &repl) noexcept;
+
+			concatenated_token_origin
+			(const arg_token &arg) noexcept;
+
+			concatenated_token_origin
+			  (const concatenated_token_origin &rhs) noexcept;
+
+			~concatenated_token_origin() noexcept;
+
+			origin get_origin() const noexcept
+			{ return _origin; }
+
+			const repl_token& get_repl_origin() const noexcept;
+
+			const arg_token& get_arg_origin() const noexcept;
+
+		      private:
+			origin _origin;
+
+			union {
+			  repl_token _repl;
+			  arg_token _arg;
+			};
+		      };
+
+		      concatenated_tokens(const concatenated_tokens&);
+
+		      concatenated_tokens(concatenated_tokens&&) noexcept;
+
+		      ~concatenated_tokens() noexcept;
+
+		    private:
+		      friend class concat_sequence;
+
+		      concatenated_tokens
+			(std::vector<concatenated_token_origin>
+			 &&concatenated_tokens_origins) noexcept;
+
+			std::vector<concatenated_token_origin>
+			_concatenated_tokens_origins;
+		    };
+
+		    struct arg_tokens
+		    {
+		      arg_ref arg;
+		      rescan_macro_invocation::output::tokens_range arg_tokens;
+		    };
+
+		    struct stringification
+		    {
+		      arg_ref arg;
+		    };
+
+		    struct conditional_comma {};
+
+		    output_fragment(output_fragment &&frag) noexcept;
+		    ~output_fragment() noexcept;
+
+		    const repl_ref& get_repl() const noexcept
+		    { return _repl; }
+
+		    std::size_t get_out_begin() const noexcept
+		    { return _out_begin; }
+
+		    kind get_kind() const noexcept
+		    { return _kind; }
+
+		    const concatenated_tokens&
+		    get_concatenated_tokens_fragment() const noexcept;
+
+		    const arg_tokens& get_arg_tokens_fragment()
+		      const noexcept;
+
+		    const stringification& get_stringification_fragment()
+		      const noexcept;
+
+		    const conditional_comma& get_conditional_comma_fragment()
+		      const noexcept;
+
+		  private:
+		    friend class concat_sequence;
+
+		    output_fragment(repl_ref &&repl,
+				    const std::size_t out_begin,
+				    concatenated_tokens &&concatenated_tokens)
+		      noexcept;
+
+		    output_fragment(repl_ref &&repl,
+				    const std::size_t out_begin,
+				    arg_tokens &&arg_tokens)
+		      noexcept;
+
+		    output_fragment(repl_ref &&repl,
+				    const std::size_t out_begin,
+				    stringification &&stringification)
+		      noexcept;
+
+		    output_fragment(repl_ref &&repl,
+				    const std::size_t out_begin,
+				    conditional_comma &&conditional_comma)
+		      noexcept;
+
+		    kind _kind;
+		    union {
+		      concatenated_tokens _concatenated_tokens;
+		      arg_tokens _arg_tokens;
+		      stringification _stringification;
+		      conditional_comma _conditional_comma;
+		    };
+		    repl_ref _repl;
+
+		    // Relative to the tokens emitted by the concat_sequence.
+		    std::size_t _out_begin;
+		  };
+
 		  concat_sequence(const concat_sequence&) = delete;
 
 		  concat_sequence(concat_sequence&&) = default;
@@ -977,6 +1139,13 @@ namespace klp
 		  const component&
 		  operator[](const _components_container_type::size_type i)
 		    const noexcept;
+
+		  bool is_stringfication() const noexcept;
+
+		  bool is_conditional_comma() const noexcept;
+
+		  std::vector<output_fragment> get_output_fragments
+		    (const rescan_macro_invocation &emitting_rmi) const;
 
 		private:
 		  friend class fragment;
@@ -1159,6 +1328,10 @@ namespace klp
 	      const noexcept;
 
 	    const output& get_output() const noexcept;
+
+	    // Length of the output. For argument tree roots, this is the
+	    // length of the (identity mapped) unexpanded argument.
+	    std::size_t out_length() const noexcept;
 
 	  private:
 	    friend class expansion_forest;

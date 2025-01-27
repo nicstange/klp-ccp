@@ -1252,6 +1252,12 @@ expansion_forest::rescan_macro_invocation::get_output() const noexcept
   return _ref.deref().get_output();
 }
 
+std::size_t expansion_forest::rescan_macro_invocation::out_length()
+  const noexcept
+{
+  return _ref.deref().out_length();
+}
+
 expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
 repl_ref() noexcept
   : _begin(std::numeric_limits<std::size_t>::max()), _length(0)
@@ -1312,6 +1318,215 @@ component::component(repl_ref &&repl, const bool skipped,
 {}
 
 
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+concatenated_token_origin(const repl_token &repl) noexcept
+  : _origin{origin::repl},
+    _repl{repl}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+concatenated_token_origin(const arg_token &arg) noexcept
+  : _origin{origin::arg},
+    _arg{arg}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+concatenated_token_origin(const concatenated_token_origin &rhs) noexcept
+  : _origin{rhs._origin}
+{
+  switch (_origin) {
+  case origin::repl:
+    new (&_repl) repl_token{rhs._repl};
+    break;
+  case origin::arg:
+    new (&_arg) arg_token{rhs._arg};
+    break;
+  }
+}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+~concatenated_token_origin() noexcept
+{
+  switch (_origin) {
+  case origin::repl:
+    _repl.~repl_token();
+    break;
+  case origin::arg:
+    _arg.~arg_token();
+    break;
+  }
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::repl_token&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+get_repl_origin() const noexcept
+{
+  assert(_origin == origin::repl);
+  return _repl;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::arg_token&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::concatenated_token_origin::
+get_arg_origin() const noexcept
+{
+  assert(_origin == origin::arg);
+  return _arg;
+}
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::
+concatenated_tokens(const concatenated_tokens&) = default;
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::
+concatenated_tokens(concatenated_tokens&&) noexcept = default;
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::
+concatenated_tokens
+  (std::vector<concatenated_token_origin> &&concatenated_tokens_origins)
+  noexcept
+: _concatenated_tokens_origins{std::move(concatenated_tokens_origins)}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens::
+~concatenated_tokens() noexcept = default;
+
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::output_fragment(repl_ref &&repl,
+				 const std::size_t out_begin,
+				 concatenated_tokens &&concatenated_tokens)
+  noexcept
+  : _kind{kind::concatenated_tokens},
+    _concatenated_tokens{std::move(concatenated_tokens)},
+    _repl{std::move(repl)},
+    _out_begin{out_begin}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::output_fragment(repl_ref &&repl,
+				 const std::size_t out_begin,
+				 arg_tokens &&arg_tokens) noexcept
+  :_kind{kind::arg_tokens},
+   _arg_tokens{std::move(arg_tokens)},
+    _repl{std::move(repl)},
+    _out_begin{out_begin}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::output_fragment(repl_ref &&repl,
+				 const std::size_t out_begin,
+				 stringification &&stringification) noexcept
+  : _kind{kind::stringification},
+    _stringification{std::move(stringification)},
+    _repl{std::move(repl)},
+    _out_begin{out_begin}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::output_fragment(repl_ref &&repl,
+		    const std::size_t out_begin,
+		    conditional_comma &&conditional_comma) noexcept
+  : _kind{kind::conditional_comma},
+    _conditional_comma{std::move(conditional_comma)},
+    _repl{std::move(repl)},
+    _out_begin{out_begin}
+{}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::output_fragment(output_fragment &&frag) noexcept
+  : _kind{frag._kind}, _repl{frag._repl}, _out_begin{frag._out_begin}
+{
+  switch (_kind) {
+  case kind::concatenated_tokens:
+    new (&_concatenated_tokens)
+      concatenated_tokens{std::move(frag._concatenated_tokens)};
+    break;
+  case kind::arg_tokens:
+    new (&_arg_tokens) arg_tokens{std::move(frag._arg_tokens)};
+    break;
+  case kind::stringification:
+    new (&_stringification) stringification{std::move(frag._stringification)};
+    break;
+  case kind::conditional_comma:
+    new (&_conditional_comma)
+      conditional_comma{std::move(frag._conditional_comma)};
+    break;
+  }
+}
+
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::~output_fragment() noexcept
+{
+  switch (_kind) {
+  case kind::concatenated_tokens:
+    _concatenated_tokens.~concatenated_tokens();
+    break;
+  case kind::arg_tokens:
+    _arg_tokens.~arg_tokens();
+    break;
+  case kind::stringification:
+    _stringification.~stringification();
+    break;
+  case kind::conditional_comma:
+    _conditional_comma.~conditional_comma();
+    break;
+  }
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::concatenated_tokens&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::get_concatenated_tokens_fragment() const noexcept
+{
+  assert(_kind == kind::concatenated_tokens);
+  return _concatenated_tokens;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::arg_tokens&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::get_arg_tokens_fragment() const noexcept
+{
+  assert(_kind == kind::arg_tokens);
+  return _arg_tokens;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::stringification&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::get_stringification_fragment() const noexcept
+{
+  assert(_kind == kind::stringification);
+  return _stringification;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::conditional_comma&
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+output_fragment::get_conditional_comma_fragment() const noexcept
+{
+  assert(_kind == kind::conditional_comma);
+  return _conditional_comma;
+}
+
 const expansion_forest::rescan_macro_invocation::output::fragment::
   concat_sequence::_components_container_type::size_type
 expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
@@ -1327,6 +1542,330 @@ operator[](const _components_container_type::size_type i)
   const noexcept
 {
   return _components[i];
+}
+
+bool
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+is_conditional_comma() const noexcept
+{
+  // The special conditional comma construct , ## __VA_ARGS__ is
+  // recognized only at the end of a concatenation sequence.
+  // Otherwise it's handled just like a regular concatenation.
+  // Furthermore, a comma cannot concatenate with anything other token
+  // to form a new valid preprocessor token. That means that if
+  // there's a conditional comma construct, and the comma is emitted,
+  // then all other components (prior to it), if any, must evaluate to empties.
+  assert(!_components.empty());
+  assert(!std::any_of(_components.cbegin(), _components.cend() - 1,
+		      [](const auto &c) {
+			return c._op == component::op::conditional_comma;
+		      }));
+  return (_components.back()._op == component::op::conditional_comma &&
+	  !_components.back()._conditional_comma_skipped);
+}
+
+bool
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+is_stringfication() const noexcept
+{
+  // A string literal cannot concatenate with anything else, including
+  // other string literals. Thus, if there is any stringification component,
+  // all others must evalutate to empties.
+  assert(std::count_if(_components.cbegin(), _components.cend(),
+		       [](const auto &c) {
+			 return c._op == component::op::stringification;
+		       }) <= 1);
+  return std::any_of(_components.cbegin(), _components.cend(),
+		     [](const auto &c) {
+		       return c._op == component::op::stringification;
+		     });
+}
+
+std::vector<
+  expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+  output_fragment
+  >
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence::
+get_output_fragments
+  (const rescan_macro_invocation &emitting_rmi) const
+{
+  using concatenated_tokens = output_fragment::concatenated_tokens;
+  using concatenated_token_origin =
+    concatenated_tokens::concatenated_token_origin;
+  using arg_tokens = output_fragment::arg_tokens;
+
+  std::vector<output_fragment> fragments;
+  std::size_t next_output_token_index = 0;
+
+  for (_components_container_type::const_iterator
+	 it_component = _components.begin();
+       it_component != _components.end();) {
+    std::vector<concatenated_token_origin> concatenated_tokens_origins;
+    switch (it_component->_op) {
+    case component::op::repl:
+      // There cannot be any stringification or conditional comma tokens.
+      assert(std::all_of
+	     (fragments.cbegin(), fragments.cend(),
+	      [](const auto &frag) {
+		return ((frag._kind ==
+			 output_fragment::kind::concatenated_tokens) ||
+			frag._kind == output_fragment::kind::arg_tokens);
+	      }));
+	  // First in a series of concatenated tokens.
+	  concatenated_tokens_origins.push_back
+	    (concatenated_token_origin{
+	       concatenated_token_origin::repl_token {
+		 .concatenated_repl_token_index =
+		   it_component->_repl.begin(),
+	       }
+	     });
+      break;
+
+    case component::op::arg:
+      {
+	const auto arg_tokens_length =
+	  ((static_cast<rescan_macro_invocation>
+	    (emitting_rmi.get_arg_tree(it_component->_arg.get_arg_index())))
+	   .out_length());
+	if (arg_tokens_length != 0) {
+	  // There cannot be any stringification or conditional comma tokens.
+	  assert(std::all_of
+		 (fragments.cbegin(), fragments.cend(),
+		  [](const auto &frag) {
+		    return ((frag._kind ==
+			     output_fragment::kind::concatenated_tokens) ||
+			    frag._kind == output_fragment::kind::arg_tokens);
+		  }));
+
+	  std::size_t consumed_arg_tokens = 0;
+	  // If the current argument has more than one token, and a
+	  // non-trivial number of concatentaion components before the
+	  // current one all evaluated to empties, then emit a
+	  // concatenated_tokens fragment wrapping only the current
+	  // argument's first token.
+	  if (arg_tokens_length != 1 && fragments.empty() &&
+	      it_component != _components.cbegin()) {
+	    fragments.push_back
+	      (output_fragment{
+		 repl_ref{it_component->_repl},
+		 next_output_token_index,
+		 concatenated_tokens {
+		   std::vector<concatenated_token_origin>{{
+		       concatenated_token_origin{
+			 concatenated_token_origin::arg_token {
+			   .arg = it_component->_arg,
+			   .arg_ref_repl_token_index =
+			     it_component->_repl.begin(),
+			   .concatenated_arg_token_index = 0,
+			 }
+		       }
+		   }}
+		 }
+	       });
+	    consumed_arg_tokens = 1;
+	    next_output_token_index += 1;
+	  } else if (!fragments.empty()) {
+	    // The first token got consumed in the previous iteration.
+	    consumed_arg_tokens = 1;
+	  }
+
+	  assert(consumed_arg_tokens == 1 ||
+		 (consumed_arg_tokens == 0 &&
+		  fragments.empty() &&
+		  (arg_tokens_length == 1 ||
+		   it_component == _components.cbegin())));
+
+	  if (arg_tokens_length != 1 &&
+	      it_component + 1 == _components.cend()) {
+	    assert(arg_tokens_length - consumed_arg_tokens > 0);
+	    // At the end of the concat sequence (which has at least
+	    // two components). The current argument's first token has
+	    // been consumed for the tail of a concatenated_tokens
+	    // fragment, either above or in the previous
+	    // iteration. The remainder gets output verbatim.
+	    assert(it_component != _components.cbegin());
+	    assert(consumed_arg_tokens == 1);
+	    fragments.push_back
+	      (output_fragment{
+		 repl_ref{it_component->_repl},
+		 next_output_token_index,
+		 arg_tokens {
+		   .arg = it_component->_arg,
+		   .arg_tokens = tokens_range{
+		     consumed_arg_tokens,
+		     arg_tokens_length,
+		   },
+		 },
+	      });
+	    next_output_token_index += arg_tokens_length - consumed_arg_tokens;
+	  } else {
+	    if (arg_tokens_length - consumed_arg_tokens > 1) {
+	      // Trivial.
+	      assert(arg_tokens_length != 1);
+	      // Otherwise the previous branch would have been taken.
+	      assert(it_component + 1 != _components.cend());
+	      // Also, from the invariant above the if-statement.
+	      assert(consumed_arg_tokens == 1 ||
+		     it_component == _components.cbegin());
+	      fragments.push_back
+		(output_fragment{
+		  repl_ref{it_component->_repl},
+		  next_output_token_index,
+		  arg_tokens {
+		    .arg = it_component->_arg,
+		    .arg_tokens = tokens_range{
+		      consumed_arg_tokens,
+		      arg_tokens_length - 1,
+		    },
+		  },
+		});
+	      next_output_token_index +=
+		arg_tokens_length - 1 - consumed_arg_tokens;
+	      consumed_arg_tokens = arg_tokens_length - 1;
+	    }
+
+	    assert(consumed_arg_tokens == arg_tokens_length - 1);
+	    // First in a series of concatenated tokens to collect.
+	    concatenated_tokens_origins.push_back
+	      (concatenated_token_origin{
+		 concatenated_token_origin::arg_token {
+		   .arg = it_component->_arg,
+		   .arg_ref_repl_token_index =
+		   it_component->_repl.begin(),
+		   .concatenated_arg_token_index = consumed_arg_tokens,
+		 }
+	       });
+	  }
+	}
+      }
+      break;
+
+    case component::op::stringification:
+      // A string cannot combine with anything else (including other
+      // strings) to form a valid preprocessor token.
+      assert(fragments.empty());
+      fragments.push_back
+	(output_fragment{
+	   repl_ref{it_component->_repl},
+	   next_output_token_index,
+	   output_fragment::stringification{
+	     .arg = it_component->_stringification._arg
+	   }
+	 });
+	next_output_token_index += 1;
+      break;
+
+    case component::op::conditional_comma:
+      // The special conditional comma construct is recognized only at
+      // the end of a concatenation sequence.
+      assert(it_component + 1 == _components.end());
+      // A comma cannot combine with anything else to form a valid
+      // preprocessor token.
+      assert(it_component->_conditional_comma_skipped ||
+	     fragments.empty());
+      if (!it_component->_conditional_comma_skipped) {
+	fragments.push_back
+	  (output_fragment{
+	     repl_ref{it_component->_repl},
+	     next_output_token_index,
+	     output_fragment::conditional_comma{}
+	   });
+	next_output_token_index += 1;
+      }
+      break;
+    }
+    ++it_component;
+
+    // If a series of concatenated tokens has been started (either by
+    // a replacement token component or an argument reference
+    // component for a non-empty argument), collect the remainder.
+    if (concatenated_tokens_origins.empty())
+      continue;
+
+    while (it_component != _components.cend()) {
+      bool stop = false;
+      switch (it_component->_op) {
+      case component::op::repl:
+	concatenated_tokens_origins.push_back
+	  (concatenated_token_origin{
+	    concatenated_token_origin::repl_token {
+	      .concatenated_repl_token_index =
+	      it_component->_repl.begin(),
+	    }
+	  });
+	break;
+
+      case component::op::arg:
+	{
+	  const auto arg_tokens_length =
+	    ((static_cast<rescan_macro_invocation>
+	      (emitting_rmi.get_arg_tree(it_component->_arg.get_arg_index())))
+	     .out_length());
+	  if (arg_tokens_length != 0) {
+	    concatenated_tokens_origins.push_back
+	      (concatenated_token_origin{
+		 concatenated_token_origin::arg_token {
+		   .arg = it_component->_arg,
+		   .arg_ref_repl_token_index =
+		   it_component->_repl.begin(),
+		   .concatenated_arg_token_index = 0,
+		 }
+	       });
+	  }
+	  stop = (arg_tokens_length > 1);
+	}
+      break;
+
+      case component::op::stringification:
+	assert(0);
+	stop = true;
+	break;
+
+      case component::op::conditional_comma:
+	assert(0);
+	stop = true;
+	break;
+      }
+
+      if (stop) {
+	break;
+      }
+      it_component += 1;
+    }
+
+    std::size_t repl_begin;
+    switch (concatenated_tokens_origins.front().get_origin()) {
+    case concatenated_token_origin::origin::repl:
+      repl_begin = (concatenated_tokens_origins.front().get_repl_origin()
+		    .concatenated_repl_token_index);
+      break;
+    case concatenated_token_origin::origin::arg:
+      repl_begin = (concatenated_tokens_origins.front().get_arg_origin()
+		    .arg_ref_repl_token_index);
+      break;
+    }
+    std::size_t repl_end;
+    switch (concatenated_tokens_origins.back().get_origin()) {
+    case concatenated_token_origin::origin::repl:
+      repl_end = (concatenated_tokens_origins.back().get_repl_origin()
+		    .concatenated_repl_token_index) + 1;
+      break;
+    case concatenated_token_origin::origin::arg:
+      repl_end = (concatenated_tokens_origins.back().get_arg_origin()
+		    .arg_ref_repl_token_index) + 1;
+      break;
+    }
+
+    fragments.push_back
+      (output_fragment{
+	 repl_ref{repl_begin, repl_end - repl_begin},
+	 next_output_token_index,
+	 concatenated_tokens {std::move(concatenated_tokens_origins)}
+       });
+    next_output_token_index += 1;
+  }
+
+  return fragments;
 }
 
 void
@@ -1421,6 +1960,19 @@ add_component(const std::size_t repl_begin, const std::size_t repl_end,
   frag._repl._length = repl_end - frag._repl._begin;
 }
 
+
+expansion_forest::rescan_macro_invocation::output::tokens_range::
+tokens_range() noexcept
+  : begin{std::numeric_limits<std::size_t>::max()}, end{0}
+{}
+
+expansion_forest::rescan_macro_invocation::output::tokens_range::
+tokens_range(const std::size_t _begin, const std::size_t _end)
+  noexcept
+  : begin{_begin}, end{_end}
+{
+  assert(begin <= end);
+}
 
 bool
 expansion_forest::rescan_macro_invocation::output::tokens_range::
