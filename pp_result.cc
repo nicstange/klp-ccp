@@ -766,6 +766,12 @@ _rescan_macro_invocation_ref(const _forest_nodes &forest,
   : _forest(forest), _node(node)
 {}
 
+expansion_forest::_rescan_macro_invocation_ref::
+operator _rescan_macro_invocation_ptr() const noexcept
+{
+  return _rescan_macro_invocation_ptr{_forest, _node};
+}
+
 bool expansion_forest::_rescan_macro_invocation_ref::
 operator==(const _rescan_macro_invocation_ref &rhs)
   const noexcept
@@ -785,6 +791,37 @@ is_nil_node() const noexcept
 {
   return _node == _forest_nodes::size_type::invalid();
 }
+
+expansion_forest::_rescan_macro_invocation_ptr::
+_rescan_macro_invocation_ptr() noexcept
+  : _forest{nullptr}, _node{_forest_nodes::size_type::invalid()}
+{}
+
+expansion_forest::_rescan_macro_invocation_ptr::
+_rescan_macro_invocation_ptr(const _forest_nodes &forest,
+			     const _forest_nodes::size_type node) noexcept
+  : _forest{&forest}, _node{node}
+{}
+
+expansion_forest::_rescan_macro_invocation_ptr::
+operator _rescan_macro_invocation_ref() const noexcept
+{
+  assert(_forest);
+  return _rescan_macro_invocation_ref{*_forest, _node};
+}
+
+expansion_forest::_rescan_macro_invocation_ptr::
+operator bool() const noexcept
+{
+  return !!_forest;
+}
+
+bool expansion_forest::_rescan_macro_invocation_ptr::
+operator==(const _rescan_macro_invocation_ptr &rhs) const noexcept
+{
+  return this->_forest == rhs._forest && this->_node == rhs._node;
+}
+
 
 expansion_forest::expansion_forest
 (const macro &m,

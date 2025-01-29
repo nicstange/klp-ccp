@@ -722,12 +722,16 @@ namespace klp
 	      const noexcept;
 	  }; // class _forest_nodes
 
+	  class _rescan_macro_invocation_ptr;
+
 	  class _rescan_macro_invocation_ref
 	  {
 	  public:
 	    _rescan_macro_invocation_ref(const _forest_nodes &forest,
 					 const _forest_nodes::size_type node)
 	      noexcept;
+
+	    explicit operator _rescan_macro_invocation_ptr() const noexcept;
 
 	    bool operator==(const _rescan_macro_invocation_ref &rhs)
 	      const noexcept;
@@ -747,6 +751,30 @@ namespace klp
 	    _forest_nodes::size_type _node;
 	  }; // class _rescan_macro_invocation_ref;
 
+	  class _rescan_macro_invocation_ptr
+	  {
+	  public:
+	    _rescan_macro_invocation_ptr() noexcept;
+
+	    _rescan_macro_invocation_ptr(const _forest_nodes &forest,
+					 const _forest_nodes::size_type node)
+	      noexcept;
+
+	    explicit operator bool() const noexcept;
+
+	    explicit operator _rescan_macro_invocation_ref() const noexcept;
+
+	    bool operator==(const _rescan_macro_invocation_ptr &rhs)
+	      const noexcept;
+
+	    bool operator!=(const _rescan_macro_invocation_ptr &rhs)
+	      const noexcept
+	    { return !(*this == rhs); }
+
+	  private:
+	    const _forest_nodes *_forest;
+	    _forest_nodes::size_type _node;
+	  }; // class _rescan_macro_invocation_ref;
 
 	public:
 	  class rescan_subtree;
