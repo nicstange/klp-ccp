@@ -2174,6 +2174,32 @@ expansion_forest::rescan_macro_invocation::output::fragment::
   }
 }
 
+const expansion_forest::rescan_macro_invocation::output::fragment::arg_ref&
+expansion_forest::rescan_macro_invocation::output::fragment::
+get_arg_ref_fragment() const noexcept
+{
+  assert(_op == op::arg);
+  return _arg;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::stringification&
+expansion_forest::rescan_macro_invocation::output::fragment::
+get_stringification_fragment() const noexcept
+{
+  assert(_op == op::stringification);
+  return _stringification;
+}
+
+const
+expansion_forest::rescan_macro_invocation::output::fragment::concat_sequence&
+expansion_forest::rescan_macro_invocation::output::fragment::
+get_concat_sequence_fragment() const noexcept
+{
+  assert(_op == op::concat);
+  return _concat_sequence;
+}
+
 
 expansion_forest::rescan_macro_invocation::output::output() noexcept
   = default;

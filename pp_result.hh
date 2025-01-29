@@ -1197,6 +1197,20 @@ namespace klp
 		auto operator()(callable_type &&c) const ->
 		  decltype(c(std::declval<repl_tag>()));
 
+		const op get_op() const noexcept
+		{ return _op; }
+
+		const repl_ref &get_repl() const noexcept
+		{ return _repl; }
+
+		const arg_ref& get_arg_ref_fragment() const noexcept;
+
+		const stringification&
+		get_stringification_fragment() const noexcept;
+
+		const concat_sequence& get_concat_sequence_fragment()
+		  const noexcept;
+
 	      private:
 		friend class output;
 
