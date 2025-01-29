@@ -931,20 +931,41 @@ expansion_forest::rescan_output_segment::get_emitting_node() const noexcept
 
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 const_fragment_iterator() noexcept
-  : _seg{nullptr}, _it_frag{}
+  : _seg_emitting_node{}, _seg_out_range_in_emitting_node{}, _it_frag{}
 {}
 
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 const_fragment_iterator(const rescan_output_segment &seg,
 			const _fragments_container_type::const_iterator it_frag)
   noexcept
-  : _seg{&seg}, _it_frag{it_frag}
+  : const_fragment_iterator{
+      seg.get_emitting_node()._ref,
+      seg.get_out_range_in_emitting_node(),
+      it_frag
+    }
+{}
+
+expansion_forest::rescan_output_segment::const_fragment_iterator::
+const_fragment_iterator
+  (const _rescan_macro_invocation_ref &seg_emitting_node,
+   const rescan_macro_invocation::output::tokens_range
+     &seg_out_range_in_emitting_node,
+   const _fragments_container_type::const_iterator it_frag)
+  noexcept
+  : _seg_emitting_node{
+      static_cast<_rescan_macro_invocation_ptr>(seg_emitting_node)
+    },
+    _seg_out_range_in_emitting_node{seg_out_range_in_emitting_node},
+    _it_frag{it_frag}
 {}
 
 bool expansion_forest::rescan_output_segment::const_fragment_iterator::
 operator==(const const_fragment_iterator &rhs) const noexcept
 {
-  return _seg == rhs._seg && _it_frag == rhs._it_frag;
+  return (_seg_emitting_node == rhs._seg_emitting_node &&
+	  (_seg_out_range_in_emitting_node ==
+	   rhs._seg_out_range_in_emitting_node) &&
+	  _it_frag == rhs._it_frag);
 }
 
 expansion_forest::rescan_output_segment::const_fragment_iterator::reference
@@ -957,13 +978,15 @@ expansion_forest::rescan_output_segment::const_fragment_iterator::operator*()
   using rescan_macro_invocation_output_range =
     rescan_macro_invocation_output::tokens_range;
 
-  assert(_seg);
-  assert(_it_frag != _seg->_emitting_node.deref()._output._fragments.end());
+  assert(static_cast<bool>(_seg_emitting_node));
+  assert(_it_frag !=
+	 (static_cast<_rescan_macro_invocation_ref>(_seg_emitting_node).deref()
+	  ._output._fragments.end()));
 
   const auto frag_out_range = _it_frag->get_out_range();
   const rescan_macro_invocation_output_range overlapping_out_range{
-    std::max(_seg->_range_in_emitting_node.begin, frag_out_range.begin),
-    std::min(_seg->_range_in_emitting_node.end, frag_out_range.end)
+    std::max(_seg_out_range_in_emitting_node.begin, frag_out_range.begin),
+    std::min(_seg_out_range_in_emitting_node.end, frag_out_range.end)
   };
   const rescan_macro_invocation_output_range range_in_frag{
     overlapping_out_range.begin - frag_out_range.begin,
@@ -985,7 +1008,11 @@ expansion_forest::rescan_output_segment::const_fragment_iterator
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 operator++(int) noexcept
 {
-  return const_fragment_iterator{*_seg, _it_frag++};
+  return const_fragment_iterator{
+    static_cast<_rescan_macro_invocation_ref>(_seg_emitting_node),
+    _seg_out_range_in_emitting_node,
+    _it_frag++
+  };
 }
 
 expansion_forest::rescan_output_segment::const_fragment_iterator&
@@ -1000,7 +1027,11 @@ expansion_forest::rescan_output_segment::const_fragment_iterator
 expansion_forest::rescan_output_segment::const_fragment_iterator::
 operator--(int) noexcept
 {
-  return const_fragment_iterator{*_seg, _it_frag--};
+  return const_fragment_iterator{
+    static_cast<_rescan_macro_invocation_ref>(_seg_emitting_node),
+    _seg_out_range_in_emitting_node,
+    _it_frag--
+  };
 }
 
 

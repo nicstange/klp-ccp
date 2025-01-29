@@ -1416,7 +1416,16 @@ namespace klp
 		 const _fragments_container_type::const_iterator it_frag)
 		noexcept;
 
-	      const rescan_output_segment *_seg;
+	      const_fragment_iterator
+		(const _rescan_macro_invocation_ref &seg_emitting_node,
+		 const rescan_macro_invocation::output::tokens_range &
+		   seg_out_range_in_emitting_node,
+		 const _fragments_container_type::const_iterator it_frag)
+		noexcept;
+
+	      _rescan_macro_invocation_ptr _seg_emitting_node;
+	      rescan_macro_invocation::output::tokens_range
+		_seg_out_range_in_emitting_node;
 	      _fragments_container_type::const_iterator _it_frag;
 	    }; // class const_fragment_iterator
 
