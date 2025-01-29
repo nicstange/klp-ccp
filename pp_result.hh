@@ -1443,6 +1443,11 @@ namespace klp
 	      _fragments_container_type::const_iterator _it_frag;
 	    }; // class const_fragment_iterator
 
+	    bool operator==(const rescan_output_segment &rhs) const noexcept;
+
+	    bool operator!=(const rescan_output_segment &rhs) const noexcept
+	    { return !(*this == rhs); }
+
 	    std::pair<const_fragment_iterator, const_fragment_iterator>
 	    fragments() const noexcept;
 

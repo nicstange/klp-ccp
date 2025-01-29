@@ -874,6 +874,13 @@ expansion_forest::rescan_output_segment::rescan_output_segment
       _range_in_emitting_node{range_in_emitting_node}
 {}
 
+bool expansion_forest::rescan_output_segment::
+operator==(const rescan_output_segment &rhs) const noexcept
+{
+  return (_emitting_node == rhs._emitting_node &&
+	  _range_in_emitting_node == rhs._range_in_emitting_node);
+}
+
 std::pair<expansion_forest::rescan_output_segment::const_fragment_iterator,
 	  expansion_forest::rescan_output_segment::const_fragment_iterator>
 expansion_forest::rescan_output_segment::
