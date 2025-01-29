@@ -1627,6 +1627,241 @@ namespace klp
 	      std::stack<std::size_t> _consumed_out_lengths_stack;
 	    }; // class const_final_out_iterator
 
+	    class const_final_out_origin_iterator
+	    {
+	    public:
+	      class output_fragment_origin
+	      {
+	      public:
+		enum class origin
+		{
+		  replacement,
+		  verbatim_invocation_arg,
+		  concatenated_tokens,
+		  stringification,
+		  builtin_special,
+		  empty,
+		};
+
+		struct replacement
+		{
+		  std::reference_wrapper<const macro> m;
+		  rescan_macro_invocation::output::fragment::repl_ref repl;
+		};
+
+		struct verbatim_invocation_arg
+		{
+		  rescan_macro_invocation::output::tokens_range src_tokens;
+		};
+
+		struct concatenated_tokens
+		{
+		  rescan_macro_invocation emitting_rmi;
+		  std::size_t out_token_index;
+		  rescan_macro_invocation::output::fragment::
+		    concat_sequence::output_fragment::concatenated_tokens
+		    concatenated_tokens;
+		};
+
+		struct stringification
+		{
+		  rescan_macro_invocation emitting_rmi;
+		  std::size_t out_token_index;
+		  rescan_macro_invocation::output::fragment::arg_ref arg;
+		};
+
+		struct builtin_special
+		{
+		  rescan_macro_invocation builtin_special_rmi;
+		  rescan_macro_invocation::output::tokens_range out_tokens;
+		};
+
+		struct empty {};
+
+		output_fragment_origin(output_fragment_origin &&rhs) noexcept;
+		~output_fragment_origin() noexcept;
+
+		origin get_origin() const noexcept
+		{ return _origin; }
+
+		const replacement& get_replacement_origin() const noexcept;
+
+		const verbatim_invocation_arg&
+		get_verbatim_invocation_arg_origin() const noexcept;
+
+		const concatenated_tokens& get_concatenated_tokens_origin()
+		  const noexcept;
+
+		const stringification& get_stringification_origin()
+		  const noexcept;
+
+		const builtin_special& get_builtin_special_origin()
+		  const noexcept;
+
+	      private:
+		friend class const_final_out_origin_iterator;
+
+		output_fragment_origin(replacement &&replacement) noexcept;
+
+		output_fragment_origin
+		  (verbatim_invocation_arg &&verbatim_invocation_arg) noexcept;
+
+		output_fragment_origin
+		  (concatenated_tokens &&concatenated_tokens) noexcept;
+
+		output_fragment_origin
+		  (stringification &&stringification) noexcept;
+
+		output_fragment_origin
+		  (builtin_special &&builtin_special) noexcept;
+
+		output_fragment_origin
+		  (empty &&empty) noexcept;
+
+		origin _origin;
+
+		union {
+		  replacement _replacement;
+		  verbatim_invocation_arg _verbatim_invocation_arg;
+		  concatenated_tokens _concatenated_tokens;
+		  stringification _stringification;
+		  builtin_special _builtin_special;
+		  empty _empty;
+		};
+	      };
+
+	      bool operator==(const const_final_out_origin_iterator &rhs)
+		const noexcept;
+
+	      bool operator!=(const const_final_out_origin_iterator &rhs)
+		const noexcept
+	      { return !(*this == rhs); }
+
+	      const_final_out_origin_iterator& operator++();
+
+	      output_fragment_origin operator*() const;
+
+	    private:
+	      friend class rescan_subtree;
+
+	      const_final_out_origin_iterator() noexcept;
+
+	      const_final_out_origin_iterator
+		(const rescan_subtree &subtree,
+		 const rescan_macro_invocation::output::tokens_range
+		   &out_range);
+
+	      using rmi_out_fragments_iter
+	      = rescan_output_segment::const_fragment_iterator;
+	      using rmi_out_fragment
+	      = rescan_macro_invocation::output::fragment;
+	      using concat_sequence_out_fragment =
+		rmi_out_fragment::concat_sequence::output_fragment;
+
+	      class _stack_entry_rmi_out_segments_iterator
+	      {
+	      public:
+		_stack_entry_rmi_out_segments_iterator
+		(const_final_out_iterator &&it,
+		 const_final_out_iterator &&end,
+		 const rescan_macro_invocation::output::tokens_range &out_range)
+		  noexcept;
+
+		_stack_entry_rmi_out_segments_iterator
+		  (rescan_macro_invocation::const_src_iterator &&it,
+		   rescan_macro_invocation::const_src_iterator &&end,
+		 const rescan_macro_invocation::output::tokens_range &out_range)
+		  noexcept;
+
+		_stack_entry_rmi_out_segments_iterator
+		  (_stack_entry_rmi_out_segments_iterator &&rhs) noexcept;
+
+		~_stack_entry_rmi_out_segments_iterator() noexcept;
+
+		bool
+		operator==(const _stack_entry_rmi_out_segments_iterator &rhs)
+		  const noexcept;
+
+		const rescan_output_segment operator*() const noexcept;
+
+		_stack_entry_rmi_out_segments_iterator& operator++();
+
+		bool at_end() const noexcept;
+
+		const rescan_macro_invocation::output::tokens_range&
+		get_out_range() const noexcept
+		{ return _out_range; }
+
+	      private:
+		enum _kind
+		{
+		  final_out,
+		  src,
+		};
+
+		struct _final_out_segments
+		{
+		  const_final_out_iterator it;
+		  const_final_out_iterator end;
+		};
+
+		struct _src_segments
+		{
+		  rescan_macro_invocation::const_src_iterator it;
+		  rescan_macro_invocation::const_src_iterator end;
+		};
+
+		_kind _kind;
+
+		union {
+		  _final_out_segments _out_segs;
+		  _src_segments _src_segs;
+		};
+
+		// Relative to the range covered by the current
+		// _out_segs/_src_segs.
+		rescan_macro_invocation::output::tokens_range _out_range;
+	      };
+
+	      struct _stack_entry_rmi_out_segment_cursor
+	      {
+		_stack_entry_rmi_out_segment_cursor
+		  (const rescan_output_segment &_out_segment,
+		   const rescan_macro_invocation::output::tokens_range
+		     &out_range);
+
+		bool operator==(const _stack_entry_rmi_out_segment_cursor &rhs)
+		  const noexcept;
+
+		void _enter_fragment();
+
+		rescan_output_segment out_segment;
+
+		std::pair<rmi_out_fragments_iter,
+			  rmi_out_fragments_iter> fragments;
+
+		std::vector<concat_sequence_out_fragment>
+		  cur_concat_sequence_fragments;
+		std::vector<concat_sequence_out_fragment>::const_iterator
+		  it_cur_concat_sequence_fragments;
+	      };
+
+	      struct _stack_entry
+	      {
+		_stack_entry
+		  (_stack_entry_rmi_out_segments_iterator &&_it_segment);
+
+		bool operator==(const _stack_entry &rhs) const noexcept;
+
+		_stack_entry_rmi_out_segments_iterator it_segment;
+		_stack_entry_rmi_out_segment_cursor cursor;
+	      };
+
+	      void _enter_arg_fragment();
+
+	      std::stack<_stack_entry> _stack;
+	    }; // const_final_out_origin_iterator
+
 	    explicit operator rescan_macro_invocation() const noexcept;
 
 	    const_dfs_pre_iterator begin() const noexcept;

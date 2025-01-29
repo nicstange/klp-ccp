@@ -2588,6 +2588,762 @@ _enter_branch_at_pos()
   }
 }
 
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(replacement &&replacement) noexcept
+  : _origin{origin::replacement},
+    _replacement{std::move(replacement)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(verbatim_invocation_arg &&verbatim_invocation_arg)
+  noexcept
+  : _origin{origin::verbatim_invocation_arg},
+    _verbatim_invocation_arg{std::move(verbatim_invocation_arg)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(concatenated_tokens &&concatenated_tokens) noexcept
+  : _origin{origin::concatenated_tokens},
+    _concatenated_tokens{std::move(concatenated_tokens)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(stringification &&stringification) noexcept
+  : _origin{origin::stringification},
+    _stringification{std::move(stringification)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(builtin_special &&builtin_special) noexcept
+  : _origin{origin::builtin_special},
+    _builtin_special{std::move(builtin_special)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(empty &&empty) noexcept
+  : _origin{origin::empty},
+    _empty{std::move(empty)}
+{}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+output_fragment_origin(output_fragment_origin &&rhs) noexcept
+  : _origin{rhs._origin}
+{
+  switch (_origin) {
+  case origin::replacement:
+    new (&_replacement) replacement{std::move(rhs._replacement)};
+    break;
+  case origin::verbatim_invocation_arg:
+    new (&_verbatim_invocation_arg) verbatim_invocation_arg{
+      std::move(rhs._verbatim_invocation_arg)
+    };
+    break;
+  case origin::concatenated_tokens:
+    new (&_concatenated_tokens) concatenated_tokens{
+      std::move(rhs._concatenated_tokens)
+    };
+    break;
+  case origin::stringification:
+    new (&_stringification) stringification{std::move(rhs._stringification)};
+    break;
+  case origin::builtin_special:
+    new (&_builtin_special) builtin_special{std::move(rhs._builtin_special)};
+    break;
+  case origin::empty:
+    new (&_empty) empty{std::move(rhs._empty)};
+    break;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::
+~output_fragment_origin() noexcept
+{
+  switch (_origin) {
+  case origin::replacement:
+    _replacement.~replacement();
+    break;
+  case origin::verbatim_invocation_arg:
+    _verbatim_invocation_arg.~verbatim_invocation_arg();
+    break;
+  case origin::concatenated_tokens:
+    _concatenated_tokens.~concatenated_tokens();
+    break;
+  case origin::stringification:
+    _stringification.~stringification();
+    break;
+  case origin::builtin_special:
+    _builtin_special.~builtin_special();
+    break;
+  case origin::empty:
+    _empty.~empty();
+    break;
+  }
+}
+
+const expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::replacement&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::get_replacement_origin() const noexcept
+{
+  assert(_origin == origin::replacement);
+  return _replacement;
+}
+
+const expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::verbatim_invocation_arg&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::get_verbatim_invocation_arg_origin() const noexcept
+{
+  assert(_origin == origin::verbatim_invocation_arg);
+  return _verbatim_invocation_arg;
+}
+
+const expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::concatenated_tokens&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::get_concatenated_tokens_origin() const noexcept
+{
+  assert(_origin == origin::concatenated_tokens);
+  return _concatenated_tokens;
+}
+
+const expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::stringification&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::get_stringification_origin() const noexcept
+{
+  assert(_origin == origin::stringification);
+  return _stringification;
+}
+
+const expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::builtin_special&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin::get_builtin_special_origin() const noexcept
+{
+  assert(_origin == origin::builtin_special);
+  return _builtin_special;
+}
+
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+const_final_out_origin_iterator() noexcept = default;
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+const_final_out_origin_iterator
+  (const rescan_subtree &subtree,
+   const rescan_macro_invocation::output::tokens_range &out_range)
+{
+  auto out_segs = _stack_entry_rmi_out_segments_iterator{
+    subtree.final_out_begin(),
+    subtree.final_out_end(),
+    out_range,
+  };
+
+  if (out_segs.at_end())
+    return;
+
+  _stack.emplace(std::move(out_segs));
+  _enter_arg_fragment();
+}
+
+bool expansion_forest::rescan_subtree::const_final_out_origin_iterator
+::operator==(const const_final_out_origin_iterator &rhs) const noexcept
+{
+  return _stack == rhs._stack;
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+operator++()
+{
+  while (!_stack.empty()) {
+    auto &stack_top = _stack.top();
+
+    if (stack_top.cursor.fragments.first == stack_top.cursor.fragments.second) {
+      // A segment corresponding to some region within an expanded
+      // argument that had not been subject to any expansion. Note
+      // that for argument ranges copied from the outermost invocation
+      // source, the emitting rescan_macro_invocation would be a NIL
+      // node.
+      assert((stack_top.cursor.out_segment
+	      .get_emitting_node().is_arg_tree_root()) ||
+	     (stack_top.cursor.out_segment
+	      .get_emitting_node().is_nil_node()));
+      _stack.pop();
+      continue;
+    }
+
+    if (stack_top.cursor.it_cur_concat_sequence_fragments !=
+	stack_top.cursor.cur_concat_sequence_fragments.end()) {
+      ++stack_top.cursor.it_cur_concat_sequence_fragments;
+      if (stack_top.cursor.it_cur_concat_sequence_fragments !=
+	  stack_top.cursor.cur_concat_sequence_fragments.end()) {
+	const auto &cur_fragment = *stack_top.cursor.fragments.first;
+	const auto &cur_concat_sequence_fragment =
+	  *stack_top.cursor.it_cur_concat_sequence_fragments;
+	if (cur_concat_sequence_fragment.get_out_begin() <
+	    cur_fragment.range_in_fragment.end) {
+	  // Still in range.
+	  break;
+	}
+      }
+    }
+
+    do {
+      ++stack_top.cursor.fragments.first;
+    }
+    while ((stack_top.cursor.fragments.first !=
+	    stack_top.cursor.fragments.second) &&
+	   ((*stack_top.cursor.fragments.first).range_in_fragment.length()
+	    == 0));
+    if (stack_top.cursor.fragments.first != stack_top.cursor.fragments.second) {
+      stack_top.cursor._enter_fragment();
+      break;
+    }
+
+    // The current segment had been exhausted.
+    ++stack_top.it_segment;
+    if (stack_top.it_segment.at_end()) {
+      _stack.pop();
+      continue;
+    }
+
+    stack_top.cursor = _stack_entry_rmi_out_segment_cursor{
+      *stack_top.it_segment,
+      stack_top.it_segment.get_out_range(),
+    };
+    break;
+  }
+
+  if (!_stack.empty())
+    _enter_arg_fragment();
+
+  return *this;
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+output_fragment_origin
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+operator*() const
+{
+  assert(!_stack.empty());
+
+  const auto &stack_top = _stack.top();
+  if (stack_top.cursor.fragments.first == stack_top.cursor.fragments.second) {
+    // Is a segment from the original outer invocation's (unpexpanded)
+    // argument tokens.
+    assert(stack_top.cursor.out_segment
+	   .get_emitting_node().is_nil_node());
+    return output_fragment_origin{
+      output_fragment_origin::verbatim_invocation_arg{
+	.src_tokens =
+	  stack_top.cursor.out_segment.get_out_range_in_emitting_node()
+      }
+    };
+  }
+
+  const auto &cur_fragment = *stack_top.cursor.fragments.first;
+  const auto emitting_rmi = stack_top.cursor.out_segment.get_emitting_node();
+  if (stack_top.cursor.it_cur_concat_sequence_fragments !=
+      stack_top.cursor.cur_concat_sequence_fragments.end()) {
+    const auto &cur_concat_sequence_fragment =
+      *stack_top.cursor.it_cur_concat_sequence_fragments;
+
+    switch (cur_concat_sequence_fragment.get_kind()) {
+    case concat_sequence_out_fragment::kind::concatenated_tokens:
+      {
+	const auto emitting_rmi_out_token_index =
+	  (cur_fragment.fragment.get_out_range().begin +
+	   cur_concat_sequence_fragment.get_out_begin());
+	return output_fragment_origin{
+	  output_fragment_origin::concatenated_tokens{
+	    .emitting_rmi = emitting_rmi,
+	    .out_token_index = emitting_rmi_out_token_index,
+	    .concatenated_tokens = (cur_concat_sequence_fragment
+				    .get_concatenated_tokens_fragment()),
+	  }
+	};
+      }
+    case concat_sequence_out_fragment::kind::arg_tokens:
+      // Impossible, the argument tokens' origins would have been
+      // followed recurisvely to their origin.
+      assert(0);
+      __builtin_unreachable();
+      break;
+    case concat_sequence_out_fragment::kind::stringification:
+      {
+	const auto emitting_rmi_out_token_index =
+	  (cur_fragment.fragment.get_out_range().begin +
+	   cur_concat_sequence_fragment.get_out_begin());
+	return output_fragment_origin{
+	  output_fragment_origin::stringification{
+	    .emitting_rmi = emitting_rmi,
+	    .out_token_index = emitting_rmi_out_token_index,
+	    .arg = (cur_concat_sequence_fragment
+		    .get_stringification_fragment().arg),
+	  }
+	};
+      }
+    case concat_sequence_out_fragment::kind::conditional_comma:
+      return output_fragment_origin{
+	output_fragment_origin::replacement{
+	  .m = std::ref(emitting_rmi.get_macro()),
+	  .repl = rmi_out_fragment::repl_ref{
+	    cur_concat_sequence_fragment.get_repl().begin(),
+	  },
+	}
+      };
+    }
+  }
+
+  switch (cur_fragment.fragment.get_op()) {
+  case rmi_out_fragment::op::repl:
+    {
+      const auto fragment_repl_begin =
+	cur_fragment.fragment.get_repl().begin();
+      const auto &range_in_fragment = cur_fragment.range_in_fragment;
+      return output_fragment_origin{
+	output_fragment_origin::replacement{
+	  .m = std::ref(emitting_rmi.get_macro()),
+	  .repl = rmi_out_fragment::repl_ref{
+	    fragment_repl_begin + range_in_fragment.begin,
+	    range_in_fragment.length(),
+	  },
+	}
+      };
+    }
+  case rmi_out_fragment::op::arg:
+    // Impossible, the argument tokens' origins would have been
+    // followed recurisvely to their origin.
+    assert(0);
+    __builtin_unreachable();
+    break;
+  case rmi_out_fragment::op::stringification:
+    {
+      const auto emitting_rmi_out_token_index =
+	cur_fragment.fragment.get_out_range().begin;
+      return output_fragment_origin{
+	output_fragment_origin::stringification{
+	  .emitting_rmi = emitting_rmi,
+	  .out_token_index = emitting_rmi_out_token_index,
+	  .arg = cur_fragment.fragment.get_stringification_fragment().get_arg(),
+	}
+      };
+    }
+    break;
+  case rmi_out_fragment::op::concat:
+    // Would have been entered.
+    assert(0);
+    __builtin_unreachable();
+    break;
+  case rmi_out_fragment::op::conditional_comma:
+    // Because empty fragments are being skipped, the conditional
+    // comma must have been emitted.
+    assert(cur_fragment.fragment.get_out_range().length() == 1);
+    assert(cur_fragment.range_in_fragment.length() == 1);
+    return output_fragment_origin{
+      output_fragment_origin::replacement{
+	.m = std::ref(emitting_rmi.get_macro()),
+	.repl = rmi_out_fragment::repl_ref{
+	  cur_fragment.fragment.get_repl().begin(),
+	},
+      }
+    };
+  case rmi_out_fragment::op::builtin_special:
+    return output_fragment_origin{
+      output_fragment_origin::builtin_special{
+	.builtin_special_rmi = emitting_rmi,
+	.out_tokens = cur_fragment.range_in_fragment,
+      }
+    };
+  case rmi_out_fragment::op::empty:
+    return output_fragment_origin{
+      output_fragment_origin::empty{}
+    };
+  }
+}
+
+void expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_enter_arg_fragment()
+{
+  if (_stack.empty())
+    return;
+
+  while (true) {
+    const auto &stack_top = _stack.top();
+
+    if (stack_top.cursor.out_segment.get_emitting_node().is_arg_tree_root()) {
+      // A region within an expanded argument that had not been
+      // subject to any expansion. Translate from the identity
+      // argument root node to the source.
+      assert(stack_top.cursor.fragments.first ==
+	     stack_top.cursor.fragments.second);
+      const auto &arg_tokens_range =
+	stack_top.cursor.out_segment.get_out_range_in_emitting_node();
+      const auto arg_root_rmi =
+	stack_top.cursor.out_segment.get_emitting_node();
+      auto src_segs = _stack_entry_rmi_out_segments_iterator{
+	arg_root_rmi.src_begin(true),
+	arg_root_rmi.src_end(true),
+	arg_tokens_range,
+      };
+      assert(!src_segs.at_end());
+      _stack.emplace(std::move(src_segs));
+    } else {
+      if (stack_top.cursor.fragments.first ==
+	  stack_top.cursor.fragments.second) {
+	break;
+      }
+
+      const auto &cur_fragment = *stack_top.cursor.fragments.first;
+      if (cur_fragment.range_in_fragment.length() == 0)
+	break;
+
+      if (stack_top.cursor.it_cur_concat_sequence_fragments !=
+	  stack_top.cursor.cur_concat_sequence_fragments.end()) {
+	assert(cur_fragment.fragment.get_op() == rmi_out_fragment::op::concat);
+	const auto &cur_concat_sequence_fragment
+	  = *stack_top.cursor.it_cur_concat_sequence_fragments;
+	if (cur_concat_sequence_fragment.get_kind() !=
+	    concat_sequence_out_fragment::kind::arg_tokens) {
+	  break;
+	}
+
+	const auto &concat_sequence_fragment_arg_tokens
+	  = cur_concat_sequence_fragment.get_arg_tokens_fragment();
+
+	// Determine the range of argument tokens to copy verbatim.
+	// It's a subrange of the range originally emitted verbatim by
+	// the concat sequence fragment, trimmed (relatively) to
+	// cur_fragment.range_in_fragment.
+	auto arg_tokens_range =
+	  concat_sequence_fragment_arg_tokens.arg_tokens;
+	if ((cur_concat_sequence_fragment.get_out_begin() +
+	     arg_tokens_range.length()) >
+	    cur_fragment.range_in_fragment.end) {
+	  arg_tokens_range.end -=
+	    ((cur_concat_sequence_fragment.get_out_begin() +
+	      arg_tokens_range.length()) -
+	     cur_fragment.range_in_fragment.end);
+	}
+	if (cur_concat_sequence_fragment.get_out_begin() <
+	    cur_fragment.range_in_fragment.begin) {
+	  arg_tokens_range.begin +=
+	    (cur_fragment.range_in_fragment.begin -
+	     cur_concat_sequence_fragment.get_out_begin());
+	}
+
+	// The cast takes it from the expanded subtree to the unexpanded
+	// identity root.
+	const auto arg_root_rmi =
+	  (static_cast<rescan_macro_invocation>
+	   (stack_top.cursor.out_segment.get_emitting_node().get_arg_tree
+	    (concat_sequence_fragment_arg_tokens.arg.get_arg_index())));
+	auto src_segs = _stack_entry_rmi_out_segments_iterator{
+	  arg_root_rmi.src_begin(true),
+	  arg_root_rmi.src_end(true),
+	  arg_tokens_range,
+	};
+	assert(!src_segs.at_end());
+	_stack.emplace(std::move(src_segs));
+
+      } else {
+	if (cur_fragment.fragment.get_op() != rmi_out_fragment::op::arg)
+	  break;
+
+	auto arg_tokens_range = cur_fragment.range_in_fragment;
+	const auto arg_tree =
+	  (stack_top.cursor.out_segment.get_emitting_node().get_arg_tree
+	   (cur_fragment.fragment.get_arg_ref_fragment().get_arg_index()));
+	auto out_segs = _stack_entry_rmi_out_segments_iterator{
+	  arg_tree.final_out_begin(),
+	  arg_tree.final_out_end(),
+	  arg_tokens_range,
+	};
+	assert(!out_segs.at_end());
+	_stack.emplace(std::move(out_segs));
+      }
+    }
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::_stack_entry_rmi_out_segments_iterator
+  (const_final_out_iterator &&it,
+   const_final_out_iterator &&end,
+   const rescan_macro_invocation::output::tokens_range &out_range) noexcept
+
+  : _kind{_kind::final_out},
+    _out_segs {
+      .it = std::move(it),
+      .end = std::move(end),
+    },
+    _out_range{out_range}
+{
+  if (_out_range.begin == _out_range.end) {
+    _out_range.begin = 0;
+    _out_range.end = 0;
+    _out_segs.it = _out_segs.end;
+    return;
+  }
+
+  const auto out_begin =
+    _out_segs.it.skip_out_distance(_out_range.begin);
+  assert(_out_range.begin >= out_begin);
+  const auto skipped = _out_range.begin - out_begin;
+  _out_range.end -= skipped;
+  _out_range.begin = out_begin;
+
+  // Skip over empty segments at the head.
+  while (_out_segs.it != _out_segs.end &&
+	 (*_out_segs.it).get_out_range_in_emitting_node().length() == 0) {
+    ++_out_segs.it;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::_stack_entry_rmi_out_segments_iterator
+  (rescan_macro_invocation::const_src_iterator &&it,
+   rescan_macro_invocation::const_src_iterator &&end,
+   const rescan_macro_invocation::output::tokens_range &out_range)
+  noexcept
+  : _kind{_kind::src},
+    _src_segs {
+      .it = std::move(it),
+      .end = std::move(end),
+    },
+    _out_range{out_range}
+{
+  if (_out_range.begin == _out_range.end) {
+    _out_range.begin = 0;
+    _out_range.end = 0;
+    _src_segs.it = _src_segs.end;
+    return;
+  }
+
+  const auto out_begin =
+    _src_segs.it.skip_src_distance(_out_range.begin);
+  assert(_out_range.begin >= out_begin);
+  const auto skipped = _out_range.begin - out_begin;
+  _out_range.end -= skipped;
+  _out_range.begin = out_begin;
+
+  // Skip over empty segments at the head.
+  while (_src_segs.it != _src_segs.end &&
+	 (*_src_segs.it).get_out_range_in_emitting_node().length() == 0) {
+    ++_src_segs.it;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::_stack_entry_rmi_out_segments_iterator
+  (_stack_entry_rmi_out_segments_iterator &&rhs) noexcept
+  : _kind{rhs._kind}, _out_range{rhs._out_range}
+{
+  switch (_kind) {
+  case _kind::final_out:
+    new (&_out_segs) _final_out_segments{
+      std::move(rhs._out_segs)
+    };
+    break;
+  case _kind::src:
+    new (&_src_segs) _src_segments{
+      std::move(rhs._src_segs)
+    };
+    break;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::
+~_stack_entry_rmi_out_segments_iterator() noexcept
+{
+  switch (_kind) {
+  case _kind::final_out:
+    _out_segs.~_final_out_segments();
+    break;
+  case _kind::src:
+    _src_segs.~_src_segments();
+    break;
+  }
+}
+
+bool expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::
+operator==(const _stack_entry_rmi_out_segments_iterator &rhs) const noexcept
+{
+  if (_kind != rhs._kind || _out_range != rhs._out_range)
+    return false;
+
+  switch (_kind) {
+  case _kind::final_out:
+    return _out_segs.it == rhs._out_segs.it;
+  case _kind::src:
+    return _src_segs.it == rhs._src_segs.it;
+  }
+}
+
+const expansion_forest::rescan_output_segment
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::
+operator*() const noexcept
+{
+  switch (_kind) {
+  case _kind::final_out:
+    return *_out_segs.it;
+  case _kind::src:
+    return *_src_segs.it;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator&
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::operator++()
+{
+  switch (_kind) {
+  case _kind::final_out:
+    {
+      assert(_out_segs.it != _out_segs.end);
+      const auto cur_seg_length =
+	(*_out_segs.it).get_out_range_in_emitting_node().length();
+      assert(_out_range.begin < cur_seg_length);
+      _out_range.begin = 0;
+      if (_out_range.end > cur_seg_length) {
+	_out_range.end -= cur_seg_length;
+	do {
+	  ++_out_segs.it;
+	} while ((_out_segs.it != _out_segs.end) &&
+		 ((*_out_segs.it).get_out_range_in_emitting_node().length()
+		  == 0));
+	// As long as _out_range.end != 0, there should be some
+	// non-trivial segments left.
+	assert(_out_segs.it != _out_segs.end);
+      } else {
+	_out_range.end = 0;
+	_out_segs.it = _out_segs.end;
+      }
+    }
+    break;
+  case _kind::src:
+    {
+      assert(_src_segs.it != _src_segs.end);
+      const auto cur_seg_length =
+	(*_src_segs.it).get_out_range_in_emitting_node().length();
+      assert(_out_range.begin < cur_seg_length);
+      _out_range.begin = 0;
+      if (_out_range.end > cur_seg_length) {
+	_out_range.end -= cur_seg_length;
+	do {
+	  ++_src_segs.it;
+	} while ((_src_segs.it != _src_segs.end) &&
+		 ((*_src_segs.it).get_out_range_in_emitting_node().length()
+		  == 0));
+	// As long as _out_range.end != 0, there should be some
+	// non-trivial segments left.
+	assert(_src_segs.it != _src_segs.end);
+      } else {
+	_out_range.end = 0;
+	_src_segs.it = _src_segs.end;
+      }
+    }
+    break;
+  }
+
+  return *this;
+}
+
+bool expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segments_iterator::at_end() const noexcept
+{
+  switch (_kind) {
+  case _kind::final_out:
+    return _out_segs.it == _out_segs.end;
+  case _kind::src:
+    return _src_segs.it == _src_segs.end;
+  }
+}
+
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segment_cursor::
+_stack_entry_rmi_out_segment_cursor
+  (const rescan_output_segment &_out_segment,
+   const rescan_macro_invocation::output::tokens_range &out_range)
+  : out_segment{_out_segment.crop_relative(out_range)},
+    fragments{out_segment.fragments()}
+{
+  // Skip over empty fragments at the head
+  while (fragments.first != fragments.second &&
+	 (*fragments.first).range_in_fragment.length() == 0) {
+    ++fragments.first;
+  }
+
+  _enter_fragment();
+}
+
+bool expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segment_cursor::
+operator==(const _stack_entry_rmi_out_segment_cursor &rhs) const noexcept
+{
+  if (out_segment != rhs.out_segment || fragments != rhs.fragments)
+    return false;
+
+  return ((it_cur_concat_sequence_fragments -
+	   cur_concat_sequence_fragments.begin()) ==
+	  (rhs.it_cur_concat_sequence_fragments -
+	   rhs.cur_concat_sequence_fragments.begin()));
+}
+
+void expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry_rmi_out_segment_cursor::_enter_fragment()
+{
+  // Reset.
+  cur_concat_sequence_fragments = std::vector<concat_sequence_out_fragment>{};
+  it_cur_concat_sequence_fragments = cur_concat_sequence_fragments.end();
+
+  if (fragments.first == fragments.second)
+    return;
+
+  // If the current fragment is a concat sequence, enter that.
+  const auto &cur_fragment = *fragments.first;
+  if (cur_fragment.fragment.get_op() != rmi_out_fragment::op::concat)
+    return;
+
+  cur_concat_sequence_fragments =
+    (cur_fragment.fragment.get_concat_sequence_fragment().get_output_fragments
+     (out_segment.get_emitting_node()));
+  it_cur_concat_sequence_fragments = cur_concat_sequence_fragments.begin();
+  // Skip over concat sequence fragments out of range at the head.
+  while ((it_cur_concat_sequence_fragments !=
+	  cur_concat_sequence_fragments.end()) &&
+	 (it_cur_concat_sequence_fragments->get_out_begin() <
+	  cur_fragment.range_in_fragment.begin)) {
+    ++it_cur_concat_sequence_fragments;
+  }
+}
+
+expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry::_stack_entry(_stack_entry_rmi_out_segments_iterator &&_it_segment)
+  : it_segment{std::move(_it_segment)},
+    cursor{*it_segment, it_segment.get_out_range()}
+{}
+
+bool expansion_forest::rescan_subtree::const_final_out_origin_iterator::
+_stack_entry::operator==(const _stack_entry &rhs) const noexcept
+{
+  return it_segment == rhs.it_segment && cursor == rhs.cursor;
+}
+
 
 expansion_forest::rescan_subtree::
 rescan_subtree(const _rescan_macro_invocation_ref &subtree_root) noexcept
