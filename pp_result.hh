@@ -1576,6 +1576,49 @@ namespace klp
 	      bool _at_end;
 	    }; // class const_dfs_pre_iterator
 
+	    class const_dfs_pre_post_iterator
+	    {
+	    public:
+	      using iterator_category = std::forward_iterator_tag;
+	      using value_type =
+		const std::tuple<bool, bool, rescan_macro_invocation>;
+	      using reference = value_type;
+
+	      const_dfs_pre_post_iterator() noexcept;
+
+	      bool operator==(const const_dfs_pre_post_iterator &rhs)
+		const noexcept;
+
+	      bool operator!=(const const_dfs_pre_post_iterator &rhs)
+		const noexcept
+	      { return !(*this == rhs); }
+
+	      reference operator*() const noexcept;
+
+	      const_dfs_pre_post_iterator& operator++() noexcept;
+	      const_dfs_pre_post_iterator operator++(int) noexcept;
+
+	    private:
+	      friend class rescan_subtree;
+
+	      struct _begin_tag{};
+	      struct _end_tag{};
+
+	      const_dfs_pre_post_iterator
+		(const _rescan_macro_invocation_ref &root, const _begin_tag&)
+		noexcept;
+
+	      const_dfs_pre_post_iterator
+		(const _rescan_macro_invocation_ref &root, const _end_tag&)
+		  noexcept;
+
+	      const _forest_nodes *_forest;
+	      _forest_nodes::size_type _subtree_root;
+	      _forest_nodes::size_type _node;
+	      _forest_nodes::size_type _next_dfs_pre_node;
+	      bool _at_dfs_pre;
+	    }; // class const_dfs_pre_post_iterator
+
 	    class const_final_out_iterator
 	    {
 	    public:
@@ -1864,8 +1907,11 @@ namespace klp
 
 	    explicit operator rescan_macro_invocation() const noexcept;
 
-	    const_dfs_pre_iterator begin() const noexcept;
-	    const_dfs_pre_iterator end() const noexcept;
+	    const_dfs_pre_iterator dfs_pre_begin() const noexcept;
+	    const_dfs_pre_iterator dfs_pre_end() const noexcept;
+
+	    const_dfs_pre_post_iterator dfs_pre_post_begin() const noexcept;
+	    const_dfs_pre_post_iterator dfs_pre_post_end() const noexcept;
 
 	    const_final_out_iterator final_out_begin() const;
 	    const_final_out_iterator final_out_end() const;

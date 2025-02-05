@@ -2436,6 +2436,112 @@ expansion_forest::rescan_subtree::const_dfs_pre_iterator::operator--(int)
 }
 
 
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+const_dfs_pre_post_iterator() noexcept
+  : _forest{nullptr},
+    _subtree_root{_forest_nodes::size_type::invalid()},
+    _node{_forest_nodes::size_type::invalid()},
+    _next_dfs_pre_node{_forest_nodes::size_type::invalid()},
+    _at_dfs_pre{false}
+{}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+const_dfs_pre_post_iterator(const _rescan_macro_invocation_ref &root,
+			    const _begin_tag&) noexcept
+  : _forest{&root.get_forest()},
+    _subtree_root{root.get_node()},
+    _node{root.get_node()},
+    _next_dfs_pre_node{
+      _forest->next_rescan_subtree_dfs_pre_node(_subtree_root, _node)
+    },
+    _at_dfs_pre{true}
+{}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+const_dfs_pre_post_iterator(const _rescan_macro_invocation_ref &root,
+			    const _end_tag&) noexcept
+  : _forest{&root.get_forest()},
+    _subtree_root{root.get_node()},
+    _node{_forest_nodes::size_type::invalid()},
+    _next_dfs_pre_node{_forest_nodes::size_type::invalid()},
+    _at_dfs_pre{false}
+{}
+
+bool expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+operator==(const const_dfs_pre_post_iterator &rhs) const noexcept
+{
+  assert(this->_forest == rhs._forest);
+  assert(this->_subtree_root == rhs._subtree_root);
+
+  return _node == rhs._node && _next_dfs_pre_node == rhs._next_dfs_pre_node;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::reference
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+operator*() const noexcept
+{
+  assert(_node != _forest_nodes::size_type::invalid());
+  const bool at_dfs_post =
+    (_next_dfs_pre_node == _forest_nodes::size_type::invalid() ||
+     (*_forest)[_next_dfs_pre_node].get_rescan_parent() != _node);
+  return (std::make_tuple
+	  (_at_dfs_pre, at_dfs_post,
+	   rescan_macro_invocation{
+	     _rescan_macro_invocation_ref{*_forest, _node}
+	   }));
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator&
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+operator++() noexcept
+{
+  assert(_node != _forest_nodes::size_type::invalid());
+
+  if (_next_dfs_pre_node == _forest_nodes::size_type::invalid()) {
+    // No next DFS pre node in the tree. Unwind for DFS post visit.
+    _at_dfs_pre = false;
+    if (_node != _subtree_root)
+      _node = (*_forest)[_node].get_rescan_parent();
+    else
+      _node = _forest_nodes::size_type::invalid();
+    return *this;
+  }
+
+  const auto node_parent = (*_forest)[_node].get_rescan_parent();
+  const auto next_dfs_pre_node_parent =
+    (*_forest)[_next_dfs_pre_node].get_rescan_parent();
+  // _next_dfs_pre_node is always a proper descendant of the
+  // _subtree_root.
+  assert(next_dfs_pre_node_parent != _forest_nodes::size_type::invalid() &&
+	 next_dfs_pre_node_parent._n >= _subtree_root._n);
+  // If node_parent is the invalid() node, encoded as ::max(), then
+  // this will not evaluate to true.
+  if (next_dfs_pre_node_parent._n < node_parent._n) {
+    // The next DFS pre node's parent is a proper ancestor of the
+    // current node's parent. Go to the parent for the DFS post visit.
+    _at_dfs_pre = false;
+    _node = node_parent;
+  } else {
+    _at_dfs_pre = true;
+    _node = _next_dfs_pre_node;
+    _next_dfs_pre_node =
+      _forest->next_rescan_subtree_dfs_pre_node(_subtree_root, _node);
+  }
+
+  return *this;
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator::
+operator++(int) noexcept
+{
+  const const_dfs_pre_post_iterator i = *this;
+
+  ++*this;
+  return i;
+}
+
+
 expansion_forest::rescan_subtree::const_final_out_iterator::
 const_final_out_iterator() noexcept
   : _forest(nullptr),
@@ -3357,7 +3463,7 @@ operator rescan_macro_invocation() const noexcept
 }
 
 expansion_forest::rescan_subtree::const_dfs_pre_iterator
-expansion_forest::rescan_subtree::begin() const noexcept
+expansion_forest::rescan_subtree::dfs_pre_begin() const noexcept
 {
   return const_dfs_pre_iterator{
     _subtree_root, const_dfs_pre_iterator::_begin_tag{}
@@ -3365,10 +3471,26 @@ expansion_forest::rescan_subtree::begin() const noexcept
 }
 
 expansion_forest::rescan_subtree::const_dfs_pre_iterator
-expansion_forest::rescan_subtree::end() const noexcept
+expansion_forest::rescan_subtree::dfs_pre_end() const noexcept
 {
   return const_dfs_pre_iterator{
     _subtree_root, const_dfs_pre_iterator::_end_tag{}
+  };
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator
+expansion_forest::rescan_subtree::dfs_pre_post_begin() const noexcept
+{
+  return const_dfs_pre_post_iterator{
+    _subtree_root, const_dfs_pre_post_iterator::_begin_tag{}
+  };
+}
+
+expansion_forest::rescan_subtree::const_dfs_pre_post_iterator
+expansion_forest::rescan_subtree::dfs_pre_post_end() const noexcept
+{
+  return const_dfs_pre_post_iterator{
+    _subtree_root, const_dfs_pre_post_iterator::_end_tag{}
   };
 }
 
