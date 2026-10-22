@@ -1,0 +1,22 @@
+/* klp-ccp: from fun-closure-14-internal.h */
+static int es_f(void);
+static int (*esp_g)(void);
+extern int ee_h(void);
+static int klpp_ps_f(void);
+int klpp_pe_k(void);
+
+/* klp-ccp: from fun-closure-14.c */
+int es_f(void);
+static int (*esp_g)(void);
+int klpp_ps_f(void);
+int klpp_pe_k(void);
+
+int klpp_ps_f(void)
+{
+	return es_f() + (*esp_g)() + ee_h();
+}
+
+int klpp_pe_k(void)
+{
+	return 0;
+}
