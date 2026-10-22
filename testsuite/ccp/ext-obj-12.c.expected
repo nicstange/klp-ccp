@@ -1,0 +1,16 @@
+/* klp-ccp: from ext-obj-12.c */
+static int es_o;
+static int es_o;
+
+static int (*esp_o2);
+static int (*esp_o2);
+
+static int (*esp_o3);
+static int (*esp_o3);
+
+void klpp_pu_f(void)
+{
+	es_o;
+	(*esp_o2);
+	(*esp_o3);
+}

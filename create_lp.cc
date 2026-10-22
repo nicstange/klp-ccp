@@ -8999,9 +8999,9 @@ bool _lp_writer::_emit(object_init_declarator_info &oidi,
       break;
 
     case linkage_change::lc_make_static:
-      if (l.is_first_in_chain()) {
-	_set_storage_class(ds, scs, ast::storage_class::sc_static, tic);
-      }
+      // A non-static object redeclaration following a static one
+      // would be invalid, annotate all of them.
+      _set_storage_class(ds, scs, ast::storage_class::sc_static, tic);
       break;
 
     case linkage_change::lc_make_extern:
@@ -9771,8 +9771,14 @@ void _lp_writer::_apply_linkage_change_for_fun
       break;
 
     case linkage_change::lc_make_static:
-      if (scs && scs->get_storage_class() != ast::storage_class::sc_static)
+      if (make_pointer) {
+	// The emitted declaration declares an object: a non-static
+	// redeclaration following a static one would be invalid.
+	_set_storage_class(ds, scs, ast::storage_class::sc_static, tic);
+      } else if (scs &&
+		 scs->get_storage_class() != ast::storage_class::sc_static) {
 	_set_storage_class(ds, scs, ast::storage_class::sc_none, tic);
+      }
       break;
 
     case linkage_change::lc_make_extern:

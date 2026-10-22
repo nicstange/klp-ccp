@@ -1,0 +1,9 @@
+/* klp-ccp: from fun-closure-13.c */
+static int (*esp_f)(void);
+static int (*esp_f)(void);
+static int (*esp_f)(void);
+
+void klpp_pu_f(void)
+{
+	(*esp_f)();
+}
