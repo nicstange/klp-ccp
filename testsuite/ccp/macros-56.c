@@ -1,10 +1,15 @@
 /*
- * B gets both of its x references lowered, so its rewritten
- * replacement list doesn't reference the parameter anymore and B's
- * argument source is not subject to macro expansion. A's first x
- * reference lies within that argument and thus must not get lowered
- * there, the lowered source would never get expanded. It gets
- * replaced verbatim and the second reference gets lowered.
+ * B's two x references conflict: espr_i is shadowed at the first,
+ * espr_j at the second one. Serving the first reference through the
+ * parameter and lowering the second one costs less argument material
+ * in B's definition than lowering both, so B's argument gets espr_j
+ * and espr_k externalized and the second reference gets its edited
+ * expansion result in place of x. Propagated to A, its first x
+ * reference (inside B's argument) now has espr_j and espr_k
+ * externalized, the second one espr_i and espr_j (espr_k is
+ * shadowed). Again, serving the first reference and lowering the
+ * second one costs less than retaining only the agreed upon '+ BAZ +'
+ * in the argument.
  */
 int espr_i;
 int espr_j;

@@ -28,6 +28,7 @@
 #include <numeric>
 #include <map>
 #include <set>
+#include <cctype>
 
 #include "macro_rewriting.hh"
 #include "pp_result_impl.hh"
@@ -115,19 +116,29 @@ bool tokens_need_separation(const pp_token::type prev_type,
 
 
 rewritten_macro_token::rewritten_macro_token(const pp_token &_tok)
-  : tok{_tok}, rename_ref{invalid_rewritten_macro_definition_id}
+  : tok{_tok}, rename_ref{invalid_rewritten_macro_definition_id},
+    is_pp_operator{false}
 {}
 
 rewritten_macro_token::
 rewritten_macro_token(const pp_token &_tok,
 		      const rewritten_macro_definition_id _rename_ref)
-  : tok{_tok}, rename_ref{_rename_ref}
+  : tok{_tok}, rename_ref{_rename_ref}, is_pp_operator{false}
 {}
+
+rewritten_macro_token::
+rewritten_macro_token(const pp_token &_tok, const pp_operator_tag&)
+  : tok{_tok}, rename_ref{invalid_rewritten_macro_definition_id},
+    is_pp_operator{true}
+{
+  assert(tok.is_punctuator("##"));
+}
 
 bool rewritten_macro_token::operator==(const rewritten_macro_token &rhs)
   const noexcept
 {
   return (this->rename_ref == rhs.rename_ref &&
+	  this->is_pp_operator == rhs.is_pp_operator &&
 	  this->tok.get_type() == rhs.tok.get_type() &&
 	  this->tok.get_value() == rhs.tok.get_value());
 }
@@ -5122,6 +5133,14 @@ rescan_subtree_rewrite_cursor::continue_rewrite()
     assert(_rewrite_queue_head != _rewrite_segments.end());
   }
 
+  // Insertions binned to the rescan tree root by the constructor,
+  // e.g. ones with a stickiness of none inbetween two tokens emitted
+  // by the root or at the very head or tail, live in segments of
+  // their own. Merge those into the final root segment now, in
+  // output order.
+  if (_rewrite_segments.size() > 1)
+    _rewrite_queue_head = _merge_segments_with_same_mi(_rewrite_queue_head);
+
   // For the invocation's initial entry rescan tree, the final segment
   // at subtree depth zero (c.f. subtree_depth_offset in the
   // constructor) has no rescan_macro_invocation associated with
@@ -6339,6 +6358,272 @@ namespace
     return toks;
   }
 
+  // Whether a token is a non-keyword identifier. Those are what the
+  // live patch writer's edits target (renames, externalizations) and
+  // thus, are the most valuable to keep in a macro invocation's
+  // argument rather than in a rewritten definition: a rewritten
+  // definition mentioning some specific identifier is unlikely to be
+  // reusable for other invocations.
+  bool is_nonkeyword_id(const pp_token &tok) noexcept
+  {
+    if (!tok.is_id())
+      return false;
+    static const char * const keywords[] = {
+      "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
+      "_Noreturn", "_Static_assert", "_Thread_local",
+      "__alignof", "__alignof__", "__asm", "__asm__", "__attribute",
+      "__attribute__", "__auto_type", "__builtin_choose_expr",
+      "__builtin_offsetof", "__builtin_types_compatible_p",
+      "__builtin_va_arg", "__complex__", "__const", "__const__",
+      "__inline", "__inline__", "__label__", "__restrict", "__restrict__",
+      "__signed__", "__typeof", "__typeof__", "__volatile", "__volatile__",
+      "asm", "auto", "break", "case", "char", "const", "continue",
+      "default", "do", "double", "else", "enum", "extern", "float", "for",
+      "goto", "if", "inline", "int", "long", "register", "restrict",
+      "return", "short", "signed", "sizeof", "static", "struct", "switch",
+      "typedef", "typeof", "union", "unsigned", "void", "volatile",
+      "while",
+    };
+    const std::string &v = tok.get_value();
+    return !std::binary_search(std::begin(keywords), std::end(keywords), v,
+			       [](const std::string &a, const std::string &b) {
+				 return a < b;
+			       });
+  }
+
+  // Whether an argument's expansion tree is free of any macro
+  // invocations, i.e. whether the argument's expansion result equals
+  // its source token by token.
+  bool arg_tree_is_macro_free(const expansion_forest::rescan_subtree &arg_tree)
+    noexcept
+  {
+    for (auto it = arg_tree.all_nodes_begin(); it != arg_tree.all_nodes_end();
+	 ++it) {
+      const rescan_macro_invocation node = *it;
+      if (!node.is_arg_tree_root())
+	return false;
+    }
+    return true;
+  }
+
+  // The "universality" of the tokens in a macro invocation argument's
+  // expansion result: for each token, the number of replacement lists
+  // it emerged from on its way to the argument's final output. Tokens
+  // written directly in the argument's source have universality
+  // zero. A token passed through some macro invocation as (part of)
+  // its argument retains its universality, whereas a token emitted
+  // from the replacement list of some invocation gets the
+  // universality of that invocation's name token plus one. A
+  // concatenation result's universality is the minimum of its
+  // constituents'.
+  //
+  // Example: with '#define M(x) N(x) baz' and '#define N(x) qux x', the
+  // argument 'M(bar)' expands to 'qux bar baz' with universalities 2,
+  // 0 and 1.
+  //
+  // The rationale is that tokens of higher universality are more
+  // likely to be the same across different invocations of the macro
+  // whose argument is being examined: a rewritten definition which
+  // retains those but leaves the specific, low universality tokens to
+  // the argument has a higher chance of getting reused.
+  class arg_out_universality
+  {
+  public:
+    arg_out_universality(const expansion_forest::rescan_subtree &arg_tree);
+
+    const std::vector<unsigned>& get() const noexcept
+    { return _u; }
+
+  private:
+    // Universality of the token at position pos of node's output. For
+    // argument tree roots, the "output" is the unexpanded argument
+    // source.
+    unsigned _univ_out(const rescan_macro_invocation &node,
+		       const std::size_t pos);
+
+    // Universality of a non-root invocation's name token.
+    unsigned _univ_name(const rescan_macro_invocation &node);
+
+    // Universality of the token at position pos within some argument
+    // tree's final output.
+    unsigned _univ_arg_tree_out(const expansion_forest::rescan_subtree &tree,
+				const std::size_t pos);
+
+    rescan_macro_invocation _main_root;
+    std::map<std::pair<original_node, std::size_t>, unsigned> _out_memo;
+    std::map<original_node, unsigned> _name_memo;
+    std::vector<unsigned> _u;
+  };
+
+  arg_out_universality::
+  arg_out_universality(const expansion_forest::rescan_subtree &arg_tree)
+    : _main_root{static_cast<rescan_macro_invocation>(arg_tree)}
+  {
+    for (auto it = arg_tree.final_out_begin(); it != arg_tree.final_out_end();
+	 ++it) {
+      const rescan_output_segment seg = *it;
+      const auto emitting = seg.get_emitting_node();
+      const auto &r = seg.get_out_range_in_emitting_node();
+      for (std::size_t q = r.begin; q < r.end; ++q)
+	_u.push_back(_univ_out(emitting, q));
+    }
+  }
+
+  unsigned arg_out_universality::_univ_out(const rescan_macro_invocation &node,
+					    const std::size_t pos)
+  {
+    if (node.is_arg_tree_root()) {
+      // The argument's own source tokens.
+      if (static_cast<original_node>(node) ==
+	  static_cast<original_node>(_main_root)) {
+	return 0;
+      }
+      // A nested argument tree's source is located in the owner's
+      // rescan parent's output.
+      const auto owner = node.get_arg_tree_owner();
+      return _univ_out(owner.get_rescan_parent(),
+		       node.get_src_range().begin + pos);
+    }
+
+    const auto key = std::make_pair(static_cast<original_node>(node), pos);
+    const auto it_memo = _out_memo.find(key);
+    if (it_memo != _out_memo.end())
+      return it_memo->second;
+
+    const auto &out = node.get_output();
+    const auto frags =
+      out.overlapping_fragments(rescan_macro_invocation::output::tokens_range{
+				  pos, pos + 1
+				});
+    assert(frags.first != frags.second);
+    const out_fragment &f = *frags.first;
+    unsigned u = 0;
+    switch (f.get_op()) {
+    case out_fragment::op::repl:
+      /* fall through */
+    case out_fragment::op::stringification:
+      /* fall through */
+    case out_fragment::op::conditional_comma:
+      /* fall through */
+    case out_fragment::op::builtin_special:
+      // Emerged from this invocation's replacement list (or created
+      // by it).
+      u = _univ_name(node) + 1;
+      break;
+
+    case out_fragment::op::empty:
+      // Placeholders never get weighed.
+      u = 0;
+      break;
+
+    case out_fragment::op::arg:
+      // Passed through from the (pre-expanded) argument.
+      u = _univ_arg_tree_out
+	(node.get_arg_tree(f.get_arg_ref_fragment().get_arg_index()),
+	 pos - f.get_out_range().begin);
+      break;
+
+    case out_fragment::op::concat:
+      {
+	// Minimum over the constituents. Tokens originating from
+	// arguments are the unexpanded ones here, located in this
+	// invocation's rescan parent's output.
+	const auto univ_unexpanded_arg_tok =
+	  [&](const std::size_t arg_index, const std::size_t k) {
+	    const auto arg_root =
+	      static_cast<rescan_macro_invocation>(node.get_arg_tree(arg_index));
+	    return _univ_out(arg_root, k);
+	  };
+	using cs_out_fragment = out_fragment::concat_sequence::output_fragment;
+	const auto &cs = f.get_concat_sequence_fragment();
+	const std::vector<cs_out_fragment> cs_frags = cs.get_output_fragments(node);
+	const std::size_t rel = pos - f.get_out_range().begin;
+	const cs_out_fragment *cf = nullptr;
+	for (const auto &c : cs_frags) {
+	  if (c.get_out_begin() <= rel)
+	    cf = &c;
+	  else
+	    break;
+	}
+	assert(cf);
+	switch (cf->get_kind()) {
+	case cs_out_fragment::kind::concatenated_tokens:
+	  {
+	    u = std::numeric_limits<unsigned>::max();
+	    const auto &ct = cf->get_concatenated_tokens_fragment();
+	    for (const auto &o : ct.get_origins()) {
+	      switch (o.get_origin()) {
+	      case cs_out_fragment::concatenated_tokens::
+		concatenated_token_origin::origin::repl:
+		u = std::min(u, _univ_name(node) + 1);
+		break;
+	      case cs_out_fragment::concatenated_tokens::
+		concatenated_token_origin::origin::arg:
+		{
+		  const auto &a = o.get_arg_origin();
+		  u = std::min(u,
+			       univ_unexpanded_arg_tok
+			       (a.arg.get_arg_index(),
+				a.concatenated_arg_token_index));
+		}
+		break;
+	      }
+	    }
+	    if (u == std::numeric_limits<unsigned>::max())
+	      u = _univ_name(node) + 1;
+	  }
+	  break;
+
+	case cs_out_fragment::kind::arg_tokens:
+	  {
+	    const auto &at = cf->get_arg_tokens_fragment();
+	    u = univ_unexpanded_arg_tok(at.arg.get_arg_index(),
+					at.arg_tokens.begin +
+					(rel - cf->get_out_begin()));
+	  }
+	  break;
+
+	case cs_out_fragment::kind::stringification:
+	  /* fall through */
+	case cs_out_fragment::kind::conditional_comma:
+	  u = _univ_name(node) + 1;
+	  break;
+	}
+      }
+      break;
+    }
+
+    _out_memo.emplace(key, u);
+    return u;
+  }
+
+  unsigned arg_out_universality::_univ_name(const rescan_macro_invocation &node)
+  {
+    assert(!node.is_arg_tree_root());
+    const auto key = static_cast<original_node>(node);
+    const auto it_memo = _name_memo.find(key);
+    if (it_memo != _name_memo.end())
+      return it_memo->second;
+    // The name token is located in the rescan parent's output at the
+    // beginning of this invocation's source range.
+    const unsigned u = _univ_out(node.get_rescan_parent(),
+				 node.get_src_range().begin);
+    _name_memo.emplace(key, u);
+    return u;
+  }
+
+  unsigned arg_out_universality::
+  _univ_arg_tree_out(const expansion_forest::rescan_subtree &tree,
+		     const std::size_t pos)
+  {
+    auto it = tree.final_out_begin();
+    const std::size_t rem = it.skip_out_distance(pos);
+    assert(it != tree.final_out_end());
+    const rescan_output_segment seg = *it;
+    return _univ_out(seg.get_emitting_node(),
+		     seg.get_out_range_in_emitting_node().begin + rem);
+  }
+
   // Materialize the result of applying a source edit script to the
   // source tokens it refers to.
   std::vector<rewritten_macro_token>
@@ -6536,17 +6821,71 @@ struct rescan_macro_invocation_rewriter::_impl
     std::vector<std::vector<insertion>> gaps;
   };
 
-  // Per macro parameter: the fragments referencing it, the edits
-  // common to all expanded references and the argument rewrites
-  // queued for it.
+  // Per macro parameter: the fragments referencing it and how each
+  // expanded reference is to be served. See the argument analysis in
+  // analyze() for the model: a contiguous range X of the argument's
+  // expansion result is retained in the (rewritten) argument, the
+  // references agreeing on the edits within X are served through the
+  // parameter with any edited material outside of X placed next to
+  // the parameter reference in the replacement list, all other
+  // references get lowered or replaced verbatim.
   struct arg_info
   {
+    static constexpr std::size_t none = std::numeric_limits<std::size_t>::max();
+
+    // Additional material needed in the replacement list around the
+    // parameter reference for a reference served through the
+    // parameter: its edited expansion result outside of X and/or a
+    // wrap or paste around X's boundary tokens (c.f. wrap_info in
+    // analyze()).
+    struct served_ref_material
+    {
+      // _arg_rewrites indices of the lowering rewrites for the
+      // portions left resp. right of X, if lowered.
+      std::size_t left_lower = none;
+      std::size_t right_lower = none;
+      // Whether the respective portion is to be emitted verbatim
+      // instead, because its position is not subject to rescan.
+      bool left_verbatim = false;
+      bool right_verbatim = false;
+      // Tokens wrapped around the X's boundary tokens: wrap_pre
+      // follows the left portion, wrap_post precedes the right
+      // portion. A non-empty paste_prefix is to be pasted onto X's
+      // first token by means of a '##' operator placed inbetween
+      // wrap_pre and the parameter reference, a paste_suffix onto X's
+      // last token likewise.
+      std::vector<pp_token> wrap_pre;
+      std::string paste_prefix;
+      std::string paste_suffix;
+      std::vector<pp_token> wrap_post;
+      // Traces of the replacement tokens which got turned into the
+      // wrap/paste material.
+      std::vector<trace_index> wrap_traces;
+      // Whether X's first resp. last token's edit is implemented
+      // through the wrap.
+      bool wrap_first = false;
+      bool wrap_last = false;
+    };
+
     std::vector<std::size_t> expanded_arg_refs;
     std::vector<std::size_t> operator_arg_refs;
+    // The edits at each expanded reference, relative to the
+    // argument's expansion result (parallel to expanded_arg_refs).
+    std::vector<arg_ref_edit> ref_edits;
+    // The retained range X, relative to the argument's expansion
+    // result, and whether it extends to the argument's head resp. tail
+    // (modulo placeholder empty tokens).
+    std::size_t x_begin = 0;
+    std::size_t x_end = 0;
+    bool x_head = true;
+    bool x_tail = true;
+    // The edits to push down into the argument's expansion tree: the
+    // served references' common edits within X, deletions outside of
+    // it.
     arg_ref_edit common;
     bool common_identity = true;
     // Whether any expanded reference is served through the parameter
-    // (as opposed to getting lowered).
+    // (as opposed to getting lowered or replaced verbatim).
     bool any_ref_kept = false;
     // Index into _impl::_arg_rewrites of the rewrite pushing the
     // common edits (or a forced rename) down into the argument's
@@ -6554,8 +6893,11 @@ struct rescan_macro_invocation_rewriter::_impl
     // the argument's source in the rewritten invocation. As the
     // argument's source changes then, any #/## references' output
     // would change as well and these need to get replaced verbatim.
-    std::size_t _arg_rewrites_index = std::numeric_limits<std::size_t>::max();
-    // frag index -> arg_rewrites index
+    std::size_t _arg_rewrites_index = none;
+    // Served references needing material next to the parameter
+    // reference: frag index -> material.
+    std::map<std::size_t, served_ref_material> served_material;
+    // Lowered references: frag index -> arg_rewrites index
     std::map<std::size_t, std::size_t> lower_rewrites;
     // Fragments whose reference gets replaced by the (edited)
     // expansion result verbatim, because the reference's position is
@@ -6604,6 +6946,12 @@ struct rescan_macro_invocation_rewriter::_impl
   std::vector<mat_token> materialize(const frag_info &fi,
 				     const bool include_head,
 				     const bool include_tail) const;
+  std::vector<mat_token> materialize_portion(const frag_info &fi,
+					     const arg_ref_edit &re,
+					     const std::size_t p_begin,
+					     const std::size_t p_end,
+					     const std::size_t g_begin,
+					     const std::size_t g_end) const;
   std::vector<rewritten_macro_token>
   finalize_mat_tokens(std::vector<mat_token> &&mat,
 		      const rrmi_index context) const;
@@ -6855,89 +7203,216 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 
   // Attribute the gap insertions to fragments resp. the definition
   // level.
+  //
+  // An insertion inbetween two fragments can either go to the
+  // definition level or get moved into an adjacent argument
+  // reference's head or tail. The latter is preferable, because it
+  // leaves the definition unchanged and thus, more likely to be
+  // reusable for other invocations. However, pushing an insertion
+  // into the argument affects every reference of the parameter, so
+  // this is feasible only if all references have identical insertions
+  // at that side. Decisions are made per parameter side: either all
+  // of its references take their insertions or none does. If both
+  // fragments adjacent to some gap are feasible argument references,
+  // the insertion's stickiness decides.
   if (!_rmi.get_macro().is_builtin_special()) {
     const std::size_t none = std::numeric_limits<std::size_t>::max();
-    const auto frag_is_empty =
-      [&](const std::size_t fi) {
-	return _frags[fi].f->get_op() == out_fragment::op::empty;
-      };
-    for (std::size_t g = 0; g <= L; ++g) {
-      if (_gap_insertions[g].empty())
-	continue;
 
-      // Canonicalize: skip over empty tokens to the right.
+    // Canonicalize: placeholder empty tokens are transparent, move
+    // insertions over them to the right so that each gap with
+    // insertions is located immediately before a non-empty token (or
+    // at the very end). Process the gaps from right to left to retain
+    // the relative order of insertions moved to the same gap.
+    for (std::size_t g = L; g > 0;) {
+      --g;
+      if (_gap_insertions[g].empty() || !out_toks[g].is_empty())
+	continue;
       std::size_t cg = g;
       while (cg < L && out_toks[cg].is_empty())
 	++cg;
-      if (cg != g) {
-	auto &dst = _gap_insertions[cg];
-	dst.insert(dst.begin(),
-		   std::make_move_iterator(_gap_insertions[g].begin()),
-		   std::make_move_iterator(_gap_insertions[g].end()));
-	_gap_insertions[g].clear();
-	continue;
-      }
+      auto &dst = _gap_insertions[cg];
+      dst.insert(dst.begin(),
+		 std::make_move_iterator(_gap_insertions[g].begin()),
+		 std::make_move_iterator(_gap_insertions[g].end()));
+      _gap_insertions[g].clear();
+    }
 
-      std::size_t left = none;
-      for (std::size_t p = g; p > 0;) {
-	--p;
-	if (!out_toks[p].is_empty()) {
-	  left = frag_of_tok[p];
-	  break;
+    // Placeholder empty tokens and whitespace (e.g. from the
+    // replacement list inbetween two parameter references) are
+    // transparent with respect to adjacency: the gaps inbetween two
+    // non-transparent tokens form a single region, whose insertions
+    // get attributed as a whole to either the fragment of the token
+    // to the left, the one to the right or the definition level.
+    const auto is_transparent =
+      [&](const std::size_t p) {
+	return out_toks[p].is_type_any_of<pp_token::type::empty,
+					  pp_token::type::ws,
+					  pp_token::type::newline>();
+      };
+    // The position of the first non-transparent token >= p, or L.
+    const auto next_nt =
+      [&](std::size_t p) {
+	while (p < L && is_transparent(p))
+	  ++p;
+	return p;
+      };
+    // The position of the last non-transparent token < p, or none.
+    const auto prev_nt =
+      [&](std::size_t p) {
+	while (p > 0) {
+	  --p;
+	  if (!is_transparent(p))
+	    return p;
 	}
-      }
-      std::size_t right = (g < L ? frag_of_tok[g] : none);
-      assert(right == none || !frag_is_empty(right));
+	return none;
+      };
+    const auto arg_index_of_frag =
+      [&](const std::size_t fi) {
+	if (fi == none || _frags[fi].f->get_op() != out_fragment::op::arg)
+	  return none;
+	return _frags[fi].f->get_arg_ref_fragment().get_arg_index();
+      };
 
-      if (left != none && left == right) {
+    // A region is identified by the position of the non-transparent
+    // token following it (L for the tail region) and spans the gaps
+    // (prev_nt(rf_pos), rf_pos].
+    struct region
+    {
+      std::size_t lf_pos;
+      std::size_t rf_pos;
+      std::size_t lf;
+      std::size_t rf;
+      std::vector<insertion> inss;
+    };
+    std::map<std::size_t, region> regions;
+    for (std::size_t g = 0; g <= L; ++g) {
+      if (_gap_insertions[g].empty())
+	continue;
+      const std::size_t rf_pos = next_nt(g);
+      const std::size_t lf_pos = prev_nt(g);
+      const std::size_t lf = lf_pos != none ? frag_of_tok[lf_pos] : none;
+      const std::size_t rf = rf_pos != L ? frag_of_tok[rf_pos] : none;
+      if (lf != none && lf == rf) {
 	// Interior gap, leave as is.
 	continue;
       }
+      auto it = regions.find(rf_pos);
+      if (it == regions.end())
+	it = regions.emplace(rf_pos, region{lf_pos, rf_pos, lf, rf, {}}).first;
+      auto &inss = _gap_insertions[g];
+      it->second.inss.insert(it->second.inss.end(),
+			     std::make_move_iterator(inss.begin()),
+			     std::make_move_iterator(inss.end()));
+      inss.clear();
+    }
 
-      std::vector<insertion> remaining;
-      for (auto &ins : _gap_insertions[g]) {
-	std::size_t target_head = none;
-	std::size_t target_tail = none;
-	switch (ins.stickiness) {
-	case sticky_side::left:
-	  if (left != none)
-	    target_tail = left;
-	  else if (right != none)
-	    target_head = right;
-	  break;
+    // The regions at a fragment's head resp. tail, if any.
+    const auto head_region_of =
+      [&](const std::size_t fi) -> const region* {
+	const std::size_t p = next_nt(_frags[fi].b());
+	if (p >= _frags[fi].e())
+	  return nullptr;
+	const auto it = regions.find(p);
+	return it != regions.end() ? &it->second : nullptr;
+      };
+    const auto tail_region_of =
+      [&](const std::size_t fi) -> const region* {
+	const std::size_t p = prev_nt(_frags[fi].e());
+	if (p == none || p < _frags[fi].b())
+	  return nullptr;
+	const auto it = regions.find(next_nt(p + 1));
+	return it != regions.end() ? &it->second : nullptr;
+      };
 
-	case sticky_side::right:
-	  if (right != none)
-	    target_head = right;
-	  else if (left != none)
-	    target_tail = left;
-	  break;
-
-	case sticky_side::none:
-	  break;
-	}
-
-	if (target_head != none &&
-	    _frags[target_head].f->get_op() == out_fragment::op::arg) {
-	  _frags[target_head].head_ins.push_back(std::move(ins));
-	} else if (target_tail != none &&
-		   _frags[target_tail].f->get_op() == out_fragment::op::arg) {
-	  _frags[target_tail].tail_ins.push_back(std::move(ins));
+    // Feasibility per parameter side: all references of the parameter
+    // (ignoring those without any non-transparent tokens, which never
+    // are adjacent to a region) have the same insertions in the region
+    // at their head resp. tail. Pushing is pointless if there aren't
+    // any insertions.
+    const std::size_t nargs = _rmi.get_nargs();
+    std::vector<bool> head_pushed(nargs, false);
+    std::vector<bool> tail_pushed(nargs, false);
+    const std::vector<insertion> no_inss;
+    for (std::size_t i = 0; i < nargs; ++i) {
+      bool head_feasible = true;
+      bool tail_feasible = true;
+      bool any_head = false;
+      bool any_tail = false;
+      const std::vector<insertion> *head_ref = nullptr;
+      const std::vector<insertion> *tail_ref = nullptr;
+      for (std::size_t fi = 0; fi < _frags.size(); ++fi) {
+	if (arg_index_of_frag(fi) != i)
+	  continue;
+	if (next_nt(_frags[fi].b()) >= _frags[fi].e())
+	  continue;
+	const region * const hr = head_region_of(fi);
+	const region * const tr = tail_region_of(fi);
+	const auto &h = hr ? hr->inss : no_inss;
+	const auto &t = tr ? tr->inss : no_inss;
+	if (!head_ref) {
+	  head_ref = &h;
+	  tail_ref = &t;
 	} else {
-	  // Definition level insertion.
+	  if (*head_ref != h)
+	    head_feasible = false;
+	  if (*tail_ref != t)
+	    tail_feasible = false;
+	}
+	any_head |= !h.empty();
+	any_tail |= !t.empty();
+      }
+      head_pushed[i] = head_feasible && any_head;
+      tail_pushed[i] = tail_feasible && any_tail;
+    }
+
+    // Resolve the competition at regions with two feasible candidates
+    // by the stickiness of the region's first insertion. The loser's
+    // side doesn't take any insertions at all, which can only reduce
+    // the competition elsewhere, so a single pass suffices.
+    for (const auto &r : regions) {
+      const std::size_t ti = arg_index_of_frag(r.second.lf);
+      const std::size_t hj = arg_index_of_frag(r.second.rf);
+      const bool tail_cand = ti != none && tail_pushed[ti];
+      const bool head_cand = hj != none && head_pushed[hj];
+      if (tail_cand && head_cand) {
+	if (r.second.inss.front().stickiness == sticky_side::left)
+	  head_pushed[hj] = false;
+	else
+	  tail_pushed[ti] = false;
+      }
+    }
+
+    // Finally distribute the insertions.
+    for (auto &r : regions) {
+      const std::size_t lf = r.second.lf;
+      const std::size_t rf = r.second.rf;
+      const std::size_t ti = arg_index_of_frag(lf);
+      const std::size_t hj = arg_index_of_frag(rf);
+      auto &inss = r.second.inss;
+      if (ti != none && tail_pushed[ti]) {
+	auto &dst = _frags[lf].tail_ins;
+	dst.insert(dst.end(), std::make_move_iterator(inss.begin()),
+		   std::make_move_iterator(inss.end()));
+      } else if (hj != none && head_pushed[hj]) {
+	auto &dst = _frags[rf].head_ins;
+	dst.insert(dst.end(), std::make_move_iterator(inss.begin()),
+		   std::make_move_iterator(inss.end()));
+      } else {
+	// Definition level insertions, placed according to their
+	// stickiness.
+	for (auto &ins : inss) {
 	  raw_pp_token_index raw_pos;
-	  if (target_tail != none)
-	    raw_pos = repl_end_of_frag(target_tail);
-	  else if (right != none)
-	    raw_pos = repl_begin_of_frag(right);
-	  else if (left != none)
-	    raw_pos = repl_end_of_frag(left);
+	  if (ins.stickiness == sticky_side::left && lf != none)
+	    raw_pos = repl_end_of_frag(lf);
+	  else if (rf != none)
+	    raw_pos = repl_begin_of_frag(rf);
+	  else if (lf != none)
+	    raw_pos = repl_end_of_frag(lf);
 	  else
 	    raw_pos = _rmi.get_macro().get_repl().size();
 	  _def_level_insertions.emplace_back(raw_pos, std::move(ins));
 	}
       }
-      _gap_insertions[g].clear();
     }
   }
 
@@ -6985,75 +7460,685 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
     }
   }
 
+  // Resolve the edits at the expanded references of each parameter.
+  //
+  // The original pre-expands each argument exactly once and the
+  // result gets substituted for every reference of the parameter in
+  // the replacement list. If the references are to be edited
+  // differently, this cannot be reproduced by rewriting the argument
+  // alone. The model applied here is to retain a contiguous range X
+  // of the argument's expansion result in the (rewritten) argument:
+  // references agreeing on the edits within X are "served" through
+  // the parameter, with their edited expansion result outside of X
+  // placed into the replacement list to the left resp. right of the
+  // parameter reference (as lowered, rewritten argument source where
+  // the position is subject to rescan, verbatim otherwise). All other
+  // references get lowered or replaced verbatim as a whole.
+  //
+  // In addition, a reference whose edit at X's first (last) token
+  // replaces that identifier by a sequence like '( * klpe_id )' can be
+  // served by wrapping the parameter reference, '( * klpe_ ## x )',
+  // with the prefix (suffix) rename implemented through a '##'
+  // paste. As '##' operands don't get pre-expanded, pastes are
+  // restricted to arguments not invoking any macros.
+  //
+  // The goal is to maximize the probability that the rewritten
+  // definition is reusable for other invocations of the same macro,
+  // without looking at any. Material from the argument's expansion
+  // result ending up in the replacement list, be it due to served
+  // references' outside portions or due to lowered/verbatim
+  // references, is what makes the definition specific to this
+  // invocation. Hence candidate ranges X are ranked by the cost of
+  // that material first, counted lexicographically with non-keyword
+  // identifiers of any universality (c.f. arg_out_universality) before
+  // all other tokens and lower universality before higher within each
+  // group. Ties are broken in favor of more served references, then
+  // in favor of not having to change the definition at all, then not
+  // having to rewrite the argument, then larger X.
+  //
+  // X may well cut through the expansion of some macro invoked from
+  // the argument: the argument's rewrite would then rewrite that
+  // invocation to drop the part outside of X and the lowered outside
+  // portions of the served references would get their own rewritten
+  // variants retaining that part.
   for (std::size_t i = 0; i < nargs; ++i) {
     auto &ai = _args[i];
     if (ai.expanded_arg_refs.empty())
       continue;
 
-    std::vector<arg_ref_edit> arg_ref_edits;
+    const std::size_t none = arg_info::none;
+    const std::size_t R = ai.expanded_arg_refs.size();
     for (const auto fi : ai.expanded_arg_refs)
-      arg_ref_edits.push_back(extract_arg_ref_edit(_frags[fi]));
+      ai.ref_edits.push_back(extract_arg_ref_edit(_frags[fi]));
+    const std::size_t alen = ai.ref_edits.front().tok_edits.size();
+    for (const auto &re : ai.ref_edits)
+      assert(re.tok_edits.size() == alen);
+    // All references are copies of the same expansion result, use the
+    // first one's tokens for examining them.
+    const std::size_t fb0 = _frags[ai.expanded_arg_refs.front()].b();
+    const auto arg_out_tok =
+      [&](const std::size_t p) -> const pp_token& {
+	return out_toks[fb0 + p];
+      };
 
-    // Compute the common edit.
-    ai.common = arg_ref_edits.front();
-    for (std::size_t r = 1; r < arg_ref_edits.size(); ++r) {
-      const auto &re = arg_ref_edits[r];
-      assert(re.tok_edits.size() == ai.common.tok_edits.size());
-      for (std::size_t p = 0; p < ai.common.tok_edits.size(); ++p) {
-	if (ai.common.tok_edits[p] != re.tok_edits[p]) {
-	  ai.common.tok_edits[p] = token_edit{};
-	  ai.common.tok_edits[p].k = token_edit::kind::kept;
+    const auto arg_tree = _rmi.get_arg_tree(i);
+    const std::vector<unsigned> univ = arg_out_universality{arg_tree}.get();
+    assert(univ.size() == alen);
+    const bool macro_free = arg_tree_is_macro_free(arg_tree);
+    unsigned nlevels = 1;
+    for (const unsigned u : univ)
+      nlevels = std::max(nlevels, u + 1);
+
+    // Placeholder empty tokens are transparent: a range X starting
+    // before the first resp. ending after the last non-empty token
+    // includes the argument's head resp. tail, i.e. the head/tail
+    // insertions at gap 0 resp. gap alen. Note that the attribution
+    // of insertions above has moved any insertions at gaps adjacent to
+    // empty tokens over to the next non-empty token.
+    std::size_t first_nonempty = alen;
+    std::size_t last_nonempty_end = 0;
+    for (std::size_t p = 0; p < alen; ++p) {
+      if (arg_out_tok(p).is_empty())
+	continue;
+      first_nonempty = std::min(first_nonempty, p);
+      last_nonempty_end = p + 1;
+    }
+    const auto at_head =
+      [&](const std::size_t b) { return b <= first_nonempty; };
+    const auto at_tail =
+      [&](const std::size_t e) { return e >= last_nonempty_end; };
+
+    // The cost vector index of material at position p: non-keyword
+    // identifiers first, then by universality.
+    const auto cost_index =
+      [&](const std::size_t p) {
+	return (is_nonkeyword_id(arg_out_tok(p)) ? 0 : nlevels) + univ[p];
+      };
+
+    // Whether reference r's edit leaves anything at position p.
+    const auto has_material_at =
+      [&](const std::size_t r, const std::size_t p) {
+	const auto &te = ai.ref_edits[r].tok_edits[p];
+	switch (te.k) {
+	case token_edit::kind::deleted:
+	  return false;
+	case token_edit::kind::kept:
+	  // Placeholders and whitespace don't make a definition
+	  // specific to the invocation.
+	  return !arg_out_tok(p).is_type_any_of<pp_token::type::empty,
+						 pp_token::type::ws,
+						 pp_token::type::newline>();
+	case token_edit::kind::replaced:
+	  return !te.replacement.empty();
+	case token_edit::kind::rewrite_macro_id:
+	  return true;
+	}
+	return false;
+      };
+
+    // Whether reference r's edit leaves anything within the positions
+    // [p_begin, p_end) and the gaps [g_begin, g_end].
+    const auto portion_has_material =
+      [&](const std::size_t r,
+	  const std::size_t p_begin, const std::size_t p_end,
+	  const std::size_t g_begin, const std::size_t g_end) {
+	for (std::size_t p = p_begin; p < p_end; ++p) {
+	  if (has_material_at(r, p))
+	    return true;
+	}
+	for (std::size_t g = g_begin; g <= g_end; ++g) {
+	  if (!ai.ref_edits[r].gaps[g].empty())
+	    return true;
+	}
+	return false;
+      };
+
+    // Lowering the argument's (rewritten) source into the replacement
+    // list is possible only where it would still get macro
+    // expanded. Otherwise, e.g. if the reference ends up as an operand
+    // to # or ## in some rescan child, the (edited) expansion result
+    // is to be placed there verbatim. Placeholder empty tokens don't
+    // count: they're not part of any rescan child's argument.
+    const auto ref_rescanned =
+      [&](const std::size_t r) {
+	const std::size_t fb = _frags[ai.expanded_arg_refs[r]].b();
+	const std::size_t fe = _frags[ai.expanded_arg_refs[r]].e();
+	for (std::size_t p = fb; p < fe; ++p) {
+	  if (!out_toks[p].is_empty() && !tok_rescanned[p])
+	    return false;
+	}
+	return true;
+      };
+
+    // A reference's edit at one of X's boundary tokens which can be
+    // implemented by wrapping the parameter reference: the identifier
+    // token gets replaced by a sequence of the form 'pre w post',
+    // where w = prefix + id + suffix is the only identifier therein. A
+    // non-empty prefix or suffix requires a '##' paste.
+    struct wrap_info
+    {
+      bool valid = false;
+      std::vector<pp_token> pre;
+      std::string prefix;
+      std::string suffix;
+      std::vector<pp_token> post;
+      std::vector<std::pair<std::size_t, trace_index>> traces;
+    };
+    const auto detect_wrap =
+      [&](const std::size_t r, const std::size_t p,
+	  const bool allow_pre_side, const bool allow_post_side) {
+	wrap_info w;
+	const auto &te = ai.ref_edits[r].tok_edits[p];
+	const pp_token &orig = arg_out_tok(p);
+	if (te.k != token_edit::kind::replaced || !orig.is_id())
+	  return w;
+	std::size_t id_pos = none;
+	for (std::size_t k = 0; k < te.replacement.size(); ++k) {
+	  if (te.replacement[k].is_id()) {
+	    if (id_pos != none)
+	      return w;
+	    id_pos = k;
+	  }
+	}
+	if (id_pos == none)
+	  return w;
+	const std::string &wv = te.replacement[id_pos].get_value();
+	const std::string &id = orig.get_value();
+	const auto found = wv.find(id);
+	if (found == std::string::npos)
+	  return w;
+	w.prefix = wv.substr(0, found);
+	w.suffix = wv.substr(found + id.size());
+	// Pasting works on the unexpanded argument, which must thus
+	// equal the expanded one.
+	if ((!w.prefix.empty() || !w.suffix.empty()) && !macro_free)
+	  return w;
+	w.pre.assign(te.replacement.begin(), te.replacement.begin() + id_pos);
+	w.post.assign(te.replacement.begin() + id_pos + 1,
+		      te.replacement.end());
+	if (!allow_pre_side && (!w.pre.empty() || !w.prefix.empty()))
+	  return w;
+	if (!allow_post_side && (!w.post.empty() || !w.suffix.empty()))
+	  return w;
+	w.traces = te.traces;
+	w.valid = true;
+	return w;
+      };
+
+    // Reference r's edits restricted to X = [b, e), with wrapped
+    // boundary tokens normalized to "kept". Gaps strictly inside X are
+    // included, the ones at the boundaries only if they coincide with
+    // the argument's head resp. tail.
+    const auto restrict_edit =
+      [&](const std::size_t r, const std::size_t b, const std::size_t e,
+	  const bool wrap_first, const bool wrap_last) {
+	arg_ref_edit k;
+	const auto &re = ai.ref_edits[r];
+	k.tok_edits.assign(re.tok_edits.begin() + b, re.tok_edits.begin() + e);
+	k.gaps.resize(e - b + 1);
+	for (std::size_t g = b + 1; g < e; ++g)
+	  k.gaps[g - b] = re.gaps[g];
+	if (at_head(b))
+	  k.gaps[0] = re.gaps[0];
+	if (at_tail(e))
+	  k.gaps[e - b] = re.gaps[alen];
+	if (wrap_first) {
+	  k.tok_edits.front() = token_edit{};
+	  k.tok_edits.front().k = token_edit::kind::kept;
+	}
+	if (wrap_last) {
+	  k.tok_edits.back() = token_edit{};
+	  k.tok_edits.back().k = token_edit::kind::kept;
+	}
+	return k;
+      };
+
+    struct class_member
+    {
+      std::size_t r;
+      bool wrap_first;
+      bool wrap_last;
+    };
+    struct candidate
+    {
+      std::size_t b = 0;
+      std::size_t e = 0;
+      arg_ref_edit rep;
+      std::vector<class_member> members;
+      std::vector<unsigned> cost;
+      std::size_t n_served = 0;
+      bool def_change = false;
+      bool identity = false;
+    };
+    // Whether a is to be preferred over b.
+    const auto better =
+      [](const candidate &a, const candidate &b) {
+	if (a.cost != b.cost) {
+	  return std::lexicographical_compare(a.cost.begin(), a.cost.end(),
+					      b.cost.begin(), b.cost.end());
+	}
+	if (a.n_served != b.n_served)
+	  return a.n_served > b.n_served;
+	if (a.def_change != b.def_change)
+	  return !a.def_change;
+	if (a.identity != b.identity)
+	  return a.identity;
+	if (a.e - a.b != b.e - b.b)
+	  return a.e - a.b > b.e - b.b;
+	return a.b < b.b;
+      };
+
+    // Search for the best candidate X. Trying every range of the
+    // expansion result with a from-scratch evaluation each would be
+    // cubic in the argument's length, which is prohibitive for
+    // arguments expanding to thousands of tokens. Instead, note that
+    // the ranking is monotone under extension of X across
+    // "uninteresting" positions: if X gets extended over a token and
+    // the thereby enclosed gap at which all references agree, the
+    // served class stays the same, the served references' material
+    // moved into X stops counting towards the cost, their outside
+    // portions shrink and X grows. The only way such an extension
+    // can hurt is through the identity tie-break, namely if the
+    // enclosed token or gap carries a non-identity edit while X's
+    // previous boundary token did not. Thus, the best X has its
+    // boundaries at the argument's head or tail, adjacent to a
+    // position at which the references disagree, adjacent to a
+    // non-empty gap or at a transition between identity and
+    // non-identity edits. Only those boundaries get enumerated.
+    //
+    // Furthermore, with per-position agreement classes and prefix
+    // sums of the material counts, partitioning the references for a
+    // range and evaluating a class take time linear in the number of
+    // conflicts within X rather than in its length.
+
+    // Agreement classes per token position and per gap: two
+    // references share a class iff their edits there compare equal.
+    const auto classify =
+      [&](const std::size_t n, auto &&get) {
+	std::vector<std::vector<std::size_t>> cls
+	  (n, std::vector<std::size_t>(R, 0));
+	std::vector<std::size_t> ncls(n, 0);
+	for (std::size_t x = 0; x < n; ++x) {
+	  for (std::size_t r = 0; r < R; ++r) {
+	    std::size_t r2 = 0;
+	    for (; r2 < r; ++r2) {
+	      if (get(r2, x) == get(r, x))
+		break;
+	    }
+	    cls[x][r] = (r2 < r ? cls[x][r2] : ncls[x]++);
+	  }
+	}
+	return std::make_pair(std::move(cls), std::move(ncls));
+      };
+    const auto tok_cls =
+      classify(alen,
+	       [&](const std::size_t r, const std::size_t p)
+	       -> const token_edit& {
+		 return ai.ref_edits[r].tok_edits[p];
+	       });
+    const auto gap_cls =
+      classify(alen + 1,
+	       [&](const std::size_t r, const std::size_t g)
+	       -> const std::vector<insertion>& {
+		 return ai.ref_edits[r].gaps[g];
+	       });
+    const auto tok_conflict =
+      [&](const std::size_t p) { return tok_cls.second[p] > 1; };
+    const auto gap_conflict =
+      [&](const std::size_t g) { return gap_cls.second[g] > 1; };
+    const auto edit_kind =
+      [&](const std::size_t r, const std::size_t p) {
+	return ai.ref_edits[r].tok_edits[p].k;
+      };
+    // The class of a plain "kept" edit at p, as substituted for
+    // wrapped boundary tokens. A fresh one if no reference has it.
+    std::vector<std::size_t> kept_class(alen);
+    for (std::size_t p = 0; p < alen; ++p) {
+      kept_class[p] = tok_cls.second[p];
+      for (std::size_t r = 0; r < R; ++r) {
+	if (edit_kind(r, p) == token_edit::kind::kept) {
+	  kept_class[p] = tok_cls.first[p][r];
+	  break;
 	}
       }
-      for (std::size_t g = 0; g < ai.common.gaps.size(); ++g) {
-	if (ai.common.gaps[g] != re.gaps[g])
-	  ai.common.gaps[g].clear();
-      }
     }
-    ai.common_identity = ai.common.is_identity();
 
-    // Determine which references deviate from the common edits
-    // ("residual"). All others are served through the parameter.
-    std::vector<bool> residuals;
-    residuals.reserve(arg_ref_edits.size());
-    bool any_residual = false;
-    for (const auto &re : arg_ref_edits) {
-      bool residual = false;
-      for (std::size_t p = 0; p < re.tok_edits.size() && !residual; ++p) {
-	if (re.tok_edits[p] != ai.common.tok_edits[p])
-	  residual = true;
+    // Prefix sums per reference: material per cost index and in
+    // total over the token positions [0, p), non-empty gaps among
+    // [0, g) and non-"kept" edits within [0, p).
+    const std::size_t ncost = 2 * nlevels;
+    std::vector<std::vector<unsigned>> mat_prefix
+      (R, std::vector<unsigned>(ncost * (alen + 1), 0));
+    std::vector<std::vector<unsigned>> anymat_prefix
+      (R, std::vector<unsigned>(alen + 1, 0));
+    std::vector<std::vector<unsigned>> gap_prefix
+      (R, std::vector<unsigned>(alen + 2, 0));
+    std::vector<std::vector<unsigned>> nonkept_prefix
+      (R, std::vector<unsigned>(alen + 1, 0));
+    for (std::size_t r = 0; r < R; ++r) {
+      for (std::size_t p = 0; p < alen; ++p) {
+	for (std::size_t k = 0; k < ncost; ++k) {
+	  mat_prefix[r][k * (alen + 1) + p + 1] =
+	    mat_prefix[r][k * (alen + 1) + p];
+	}
+	const bool mat = has_material_at(r, p);
+	if (mat)
+	  ++mat_prefix[r][cost_index(p) * (alen + 1) + p + 1];
+	anymat_prefix[r][p + 1] = anymat_prefix[r][p] + mat;
+	nonkept_prefix[r][p + 1] =
+	  (nonkept_prefix[r][p] +
+	   (edit_kind(r, p) != token_edit::kind::kept));
       }
-      for (std::size_t g = 0; g < re.gaps.size() && !residual; ++g) {
-	if (re.gaps[g] != ai.common.gaps[g])
-	  residual = true;
+      for (std::size_t g = 0; g <= alen; ++g) {
+	gap_prefix[r][g + 1] =
+	  gap_prefix[r][g] + !ai.ref_edits[r].gaps[g].empty();
       }
-      residuals.push_back(residual);
-      any_residual |= residual;
     }
+    // Material of reference r at cost index k within [p_begin, p_end).
+    const auto mat_in =
+      [&](const std::size_t r, const std::size_t k,
+	  const std::size_t p_begin, const std::size_t p_end) {
+	return (mat_prefix[r][k * (alen + 1) + p_end] -
+		mat_prefix[r][k * (alen + 1) + p_begin]);
+      };
+    const auto anymat_in =
+      [&](const std::size_t r,
+	  const std::size_t p_begin, const std::size_t p_end) {
+	return anymat_prefix[r][p_end] - anymat_prefix[r][p_begin];
+      };
+    // Non-empty gaps of reference r among [g_begin, g_end].
+    const auto gaps_in =
+      [&](const std::size_t r,
+	  const std::size_t g_begin, const std::size_t g_end) {
+	return gap_prefix[r][g_end + 1] - gap_prefix[r][g_begin];
+      };
+    const auto nonkept_in =
+      [&](const std::size_t r,
+	  const std::size_t p_begin, const std::size_t p_end) {
+	return nonkept_prefix[r][p_end] - nonkept_prefix[r][p_begin];
+      };
+
+    // The candidate boundaries, c.f. above. Canonical boundaries
+    // don't point at placeholder empty tokens, c.f. the
+    // canonicalization in the enumeration below.
+    std::vector<std::size_t> bounds;
+    const auto add_bound =
+      [&](std::size_t x) {
+	x = std::min(x, alen);
+	while (x < alen && arg_out_tok(x).is_empty())
+	  ++x;
+	bounds.push_back(x);
+      };
+    add_bound(0);
+    add_bound(alen);
+    // At which positions all references agree on a non-identity edit.
+    std::vector<bool> nonid(alen, false);
+    for (std::size_t p = 0; p < alen; ++p) {
+      if (tok_conflict(p)) {
+	add_bound(p);
+	add_bound(p + 1);
+      } else {
+	nonid[p] = edit_kind(0, p) != token_edit::kind::kept;
+      }
+    }
+    for (std::size_t g = 0; g <= alen; ++g) {
+      if (gap_conflict(g) || !ai.ref_edits[0].gaps[g].empty()) {
+	add_bound(g);
+	// The head and tail gaps enter the comparison with the
+	// boundaries of X at the argument's head resp. tail only. The
+	// candidate boundaries adjacent to those matter then.
+	if (g == 0)
+	  add_bound(first_nonempty + 1);
+	if (g == alen && last_nonempty_end != 0)
+	  add_bound(last_nonempty_end - 1);
+      }
+    }
+    for (std::size_t p = 1; p < alen; ++p) {
+      if (nonid[p] != nonid[p - 1])
+	add_bound(p);
+    }
+    std::sort(bounds.begin(), bounds.end());
+    bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+
+    // The conflict positions, for forming the agreement classes.
+    std::vector<std::size_t> conflict_toks;
+    std::vector<std::size_t> conflict_gaps;
+    for (std::size_t p = 0; p < alen; ++p) {
+      if (tok_conflict(p))
+	conflict_toks.push_back(p);
+    }
+    for (std::size_t g = 0; g <= alen; ++g) {
+      if (gap_conflict(g))
+	conflict_gaps.push_back(g);
+    }
+
+    // The signature of reference r's edits restricted to X = [b, e),
+    // with wrapped boundary tokens normalized to "kept": equal
+    // signatures mean equal restricted edits. Besides the conflict
+    // positions, the boundary tokens are always included so that
+    // wrapped and literal variants get told apart.
+    const auto signature =
+      [&](const std::size_t r, const std::size_t b, const std::size_t e,
+	  const bool wrap_first, const bool wrap_last) {
+	std::vector<std::size_t> sig;
+	const auto tok_sig =
+	  [&](const std::size_t p) {
+	    if ((wrap_first && p == b) || (wrap_last && p + 1 == e))
+	      return kept_class[p];
+	    return tok_cls.first[p][r];
+	  };
+	if (b < e) {
+	  sig.push_back(tok_sig(b));
+	  if (e > b + 1)
+	    sig.push_back(tok_sig(e - 1));
+	}
+	for (auto it = std::lower_bound(conflict_toks.begin(),
+					conflict_toks.end(), b + 1);
+	     it != conflict_toks.end() && *it + 1 < e; ++it) {
+	  sig.push_back(tok_sig(*it));
+	}
+	if (at_head(b))
+	  sig.push_back(gap_cls.first[0][r]);
+	for (auto it = std::lower_bound(conflict_gaps.begin(),
+					conflict_gaps.end(), b + 1);
+	     it != conflict_gaps.end() && *it < e; ++it) {
+	  sig.push_back(gap_cls.first[*it][r]);
+	}
+	if (at_tail(e))
+	  sig.push_back(gap_cls.first[alen][r]);
+	return sig;
+      };
+
+    // Evaluate a candidate's cost etc. from its members in terms of
+    // the prefix sums.
+    const auto evaluate =
+      [&](candidate &c) {
+	std::vector<bool> served(R, false);
+	for (const auto &m : c.members)
+	  served[m.r] = true;
+	c.cost.assign(ncost, 0);
+	c.n_served = c.members.size();
+	c.def_change = c.n_served < R;
+	for (std::size_t r = 0; r < R; ++r) {
+	  for (std::size_t k = 0; k < ncost; ++k) {
+	    c.cost[k] += mat_in(r, k, 0, alen);
+	    if (served[r])
+	      c.cost[k] -= mat_in(r, k, c.b, c.e);
+	  }
+	  if (!served[r])
+	    continue;
+	  if (!at_head(c.b) &&
+	      (anymat_in(r, 0, c.b) || gaps_in(r, 0, c.b)))
+	    c.def_change = true;
+	  if (!at_tail(c.e) &&
+	      (anymat_in(r, c.e, alen) || gaps_in(r, c.e, alen)))
+	    c.def_change = true;
+	}
+	for (const auto &m : c.members) {
+	  if (m.wrap_first || m.wrap_last)
+	    c.def_change = true;
+	}
+	// The representative edit is the first member's restricted
+	// one: identity iff all of its edits within X are "kept",
+	// wrapped boundary tokens included, and all of the gaps
+	// considered are empty.
+	c.identity = false;
+	if (at_head(c.b) && at_tail(c.e) && c.n_served) {
+	  const class_member &m = c.members.front();
+	  unsigned nonkept = nonkept_in(m.r, c.b, c.e);
+	  if (m.wrap_first && edit_kind(m.r, c.b) != token_edit::kind::kept)
+	    --nonkept;
+	  if (m.wrap_last && !(m.wrap_first && c.e == c.b + 1) &&
+	      edit_kind(m.r, c.e - 1) != token_edit::kind::kept) {
+	    --nonkept;
+	  }
+	  const bool inner_gaps =
+	    c.e > c.b + 1 && gaps_in(m.r, c.b + 1, c.e - 1);
+	  c.identity = (!nonkept && !inner_gaps &&
+			ai.ref_edits[m.r].gaps[0].empty() &&
+			ai.ref_edits[m.r].gaps[alen].empty());
+	}
+      };
+
+    candidate best;
+    bool have_best = false;
+    const auto consider =
+      [&](candidate &&c) {
+	evaluate(c);
+	if (!have_best || better(c, best)) {
+	  best = std::move(c);
+	  have_best = true;
+	}
+      };
+
+    // The candidate serving no reference at all: everything gets
+    // lowered or replaced verbatim.
+    consider(candidate{});
+
+    for (const std::size_t b : bounds) {
+      for (const std::size_t e : bounds) {
+	if (e < b)
+	  continue;
+	if (b == e && alen != 0)
+	  continue;
+
+	// Partition the references into agreement classes. A
+	// reference with a wrappable boundary edit contributes both,
+	// its literal edits and the wrapped variants.
+	std::vector<std::pair<std::vector<std::size_t>, candidate>> classes;
+	for (std::size_t r = 0; r < R; ++r) {
+	  const auto &re = ai.ref_edits[r];
+	  std::vector<class_member> variants;
+	  variants.push_back(class_member{r, false, false});
+	  if (b < e) {
+	    // A wrap at X's first token must not be preceded by
+	    // insertions within the rewritten argument, likewise for
+	    // the last one.
+	    const bool first_ok = (!at_head(b) || re.gaps[0].empty());
+	    const bool last_ok = (!at_tail(e) || re.gaps[alen].empty());
+	    const wrap_info wf =
+	      (first_ok ?
+	       detect_wrap(r, b, true, e == b + 1) : wrap_info{});
+	    const wrap_info wl =
+	      (last_ok && e > b + 1 ?
+	       detect_wrap(r, e - 1, false, true) : wrap_info{});
+	    if (wf.valid)
+	      variants.push_back(class_member{r, true, e == b + 1});
+	    if (wl.valid)
+	      variants.push_back(class_member{r, false, true});
+	    if (wf.valid && wl.valid)
+	      variants.push_back(class_member{r, true, true});
+	  }
+	  for (const auto &v : variants) {
+	    auto sig = signature(r, b, e, v.wrap_first, v.wrap_last);
+	    bool found = false;
+	    for (auto &c : classes) {
+	      if (c.first != sig)
+		continue;
+	      found = true;
+	      if (std::none_of(c.second.members.begin(),
+			       c.second.members.end(),
+			       [&](const class_member &m) {
+				 return m.r == r;
+			       })) {
+		c.second.members.push_back(v);
+	      }
+	      break;
+	    }
+	    if (!found) {
+	      candidate c;
+	      c.b = b;
+	      c.e = e;
+	      c.members.push_back(v);
+	      classes.emplace_back(std::move(sig), std::move(c));
+	    }
+	  }
+	}
+	for (auto &c : classes)
+	  consider(std::move(c.second));
+      }
+    }
+    assert(have_best);
+    // Materialize the winner's representative edit.
+    if (best.n_served) {
+      const class_member &m = best.members.front();
+      best.rep = restrict_edit(m.r, best.b, best.e,
+			       m.wrap_first, m.wrap_last);
+    }
+
+    const std::size_t b = best.b;
+    const std::size_t e = best.e;
+    ai.x_begin = b;
+    ai.x_end = e;
+    ai.x_head = at_head(b);
+    ai.x_tail = at_tail(e);
 
     // The original pre-expands the argument exactly once, no matter
     // how often the parameter is referenced. If that expansion
     // invokes __COUNTER__, the rewritten invocation must not invoke
     // it more often than that, so lowering it into the replacement
-    // list is never an option. Residual references would have to
-    // get replaced by their (edited) expansion result verbatim,
-    // which freezes the __COUNTER__ value. For robustness, don't let
-    // any reference be served through the parameter then, but
-    // replace all of them verbatim: the argument doesn't get
-    // expanded at all and no live __COUNTER__ value can disagree
-    // with the frozen ones. Whether the __COUNTER__ invocation would
-    // survive the argument's rewrite is not known before that has
-    // been carried out, so assume it does.
-    if (any_residual &&
+    // list, in whole or in part, is never an option. For robustness,
+    // don't let any reference be served through the parameter then
+    // unless all of them can be served without any additional
+    // material, but replace all of them verbatim: the argument
+    // doesn't get expanded at all and no live __COUNTER__ value can
+    // disagree with the frozen ones. Whether the __COUNTER__
+    // invocation would survive the argument's rewrite is not known
+    // before that has been carried out, so assume it does.
+    if (best.def_change &&
 	_forest.subtree_invokes_counter(_rmi.get_arg_tree(i))) {
       ai.verbatim_arg_refs = ai.expanded_arg_refs;
       continue;
     }
 
-    for (std::size_t r = 0; r < residuals.size(); ++r) {
-      if (!residuals[r])
-	ai.any_ref_kept = true;
+    // The edits to push down into the argument: the served
+    // references' common edits within X and deletions outside of
+    // it. Gaps outside of X belong to the outside portions. Deleting
+    // placeholder empty tokens is meaningless, keep them: an
+    // invocation whose non-empty output gets deleted completely is
+    // dropped from the source by its rewriter anyway.
+    ai.common.tok_edits.assign(alen, token_edit{});
+    ai.common.gaps.assign(alen + 1, std::vector<insertion>{});
+    for (std::size_t p = 0; p < alen; ++p) {
+      if (arg_out_tok(p).is_empty())
+	ai.common.tok_edits[p].k = token_edit::kind::kept;
     }
+    if (best.n_served) {
+      for (std::size_t p = b; p < e; ++p)
+	ai.common.tok_edits[p] = best.rep.tok_edits[p - b];
+      for (std::size_t g = b; g <= e; ++g) {
+	if ((g == b && !ai.x_head) || (g == e && !ai.x_tail))
+	  continue;
+	ai.common.gaps[g] = best.rep.gaps[g - b];
+      }
+    } else {
+      // Nothing is served, the argument stays as is in the source
+      // (and doesn't get expanded).
+      for (auto &te : ai.common.tok_edits)
+	te.k = token_edit::kind::kept;
+    }
+    ai.common_identity = ai.common.is_identity();
+    ai.any_ref_kept = best.n_served != 0;
 
     // Even if there's nothing to push down into the argument, its
     // expansion tree needs to get processed if it contains any
@@ -7069,35 +8154,97 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
       _arg_rewrites.push_back(std::move(ar));
     }
 
-    for (std::size_t r = 0; r < arg_ref_edits.size(); ++r) {
-      if (!residuals[r])
+    // Queue a lowering rewrite of reference r's edits restricted to
+    // the positions [p_begin, p_end) and gaps [g_begin, g_end],
+    // everything else deleted.
+    const auto queue_lowering =
+      [&](const std::size_t r,
+	  const std::size_t p_begin, const std::size_t p_end,
+	  const std::size_t g_begin, const std::size_t g_end) {
+	arg_ref_edit part = ai.ref_edits[r];
+	for (std::size_t p = 0; p < alen; ++p) {
+	  if (p < p_begin || p >= p_end) {
+	    part.tok_edits[p] = token_edit{};
+	    if (arg_out_tok(p).is_empty())
+	      part.tok_edits[p].k = token_edit::kind::kept;
+	  }
+	}
+	for (std::size_t g = 0; g <= alen; ++g) {
+	  if (g < g_begin || g > g_end)
+	    part.gaps[g].clear();
+	}
+	arg_rewrite ar{i, {}, {}, {}};
+	ar.script = arg_ref_edit_to_script(part, ar.traces);
+	_arg_rewrites.push_back(std::move(ar));
+	return _arg_rewrites.size() - 1;
+      };
+
+    std::vector<const class_member*> member_of(R, nullptr);
+    for (const auto &m : best.members)
+      member_of[m.r] = &m;
+    for (std::size_t r = 0; r < R; ++r) {
+      const std::size_t fi = ai.expanded_arg_refs[r];
+      const bool rescanned = ref_rescanned(r);
+      if (!member_of[r]) {
+	// Not served through the parameter: lower the reference's
+	// rewritten argument source into the replacement list, or
+	// place the edited expansion result there verbatim.
+	if (!rescanned) {
+	  ai.verbatim_arg_refs.push_back(fi);
+	} else {
+	  ai.lower_rewrites.emplace(fi, queue_lowering(r, 0, alen, 0, alen));
+	}
+	continue;
+      }
+
+      // Served: collect the material needed next to the parameter
+      // reference, if any.
+      const class_member &m = *member_of[r];
+      const bool left_mat =
+	!ai.x_head && portion_has_material(r, 0, b, 0, b);
+      const bool right_mat =
+	!ai.x_tail && portion_has_material(r, e, alen, e, alen);
+      if (!left_mat && !right_mat && !m.wrap_first && !m.wrap_last)
 	continue;
 
-      // Lowering the argument's (rewritten) source into the
-      // replacement list is possible only where it would still get
-      // macro expanded. Otherwise, e.g. if the reference ends up as
-      // an operand to # or ## in some rescan child, the (edited)
-      // expansion result is to be placed there verbatim.
-      // Placeholder empty tokens don't count: they're not part of
-      // any rescan child's argument.
-      const std::size_t fb = _frags[ai.expanded_arg_refs[r]].b();
-      const std::size_t fe = _frags[ai.expanded_arg_refs[r]].e();
-      bool rescanned = true;
-      for (std::size_t p = fb; p < fe && rescanned; ++p) {
-	if (!out_toks[p].is_empty() && !tok_rescanned[p])
-	  rescanned = false;
+      arg_info::served_ref_material mat;
+      if (left_mat) {
+	if (rescanned)
+	  mat.left_lower = queue_lowering(r, 0, b, 0, b);
+	else
+	  mat.left_verbatim = true;
       }
-      if (!rescanned) {
-	ai.verbatim_arg_refs.push_back(ai.expanded_arg_refs[r]);
-	continue;
+      if (right_mat) {
+	if (rescanned)
+	  mat.right_lower = queue_lowering(r, e, alen, e, alen);
+	else
+	  mat.right_verbatim = true;
       }
-
-      // Lower the argument into the replacement list at this
-      // reference.
-      arg_rewrite ar{i, {}, {}, {}};
-      ar.script = arg_ref_edit_to_script(arg_ref_edits[r], ar.traces);
-      ai.lower_rewrites.emplace(ai.expanded_arg_refs[r], _arg_rewrites.size());
-      _arg_rewrites.push_back(std::move(ar));
+      if (m.wrap_first) {
+	const wrap_info w = detect_wrap(r, b, true, e == b + 1);
+	assert(w.valid);
+	mat.wrap_first = true;
+	mat.wrap_pre = w.pre;
+	mat.paste_prefix = w.prefix;
+	if (e == b + 1) {
+	  // Single token X, the wrap covers both sides.
+	  mat.wrap_last = true;
+	  mat.paste_suffix = w.suffix;
+	  mat.wrap_post = w.post;
+	}
+	for (const auto &tr : w.traces)
+	  mat.wrap_traces.push_back(tr.second);
+      }
+      if (m.wrap_last && e > b + 1) {
+	const wrap_info w = detect_wrap(r, e - 1, false, true);
+	assert(w.valid);
+	mat.wrap_last = true;
+	mat.paste_suffix = w.suffix;
+	mat.wrap_post = w.post;
+	for (const auto &tr : w.traces)
+	  mat.wrap_traces.push_back(tr.second);
+      }
+      ai.served_material.emplace(fi, std::move(mat));
     }
   }
 }
@@ -7300,6 +8447,28 @@ materialize(const frag_info &fi, const bool include_head,
   return mat;
 }
 
+// Materialize a portion of an expanded argument reference's edited
+// result: the positions [p_begin, p_end) of the argument's expansion
+// result and the gaps [g_begin, g_end], relative to the fragment fi.
+std::vector<rescan_macro_invocation_rewriter::_impl::mat_token>
+rescan_macro_invocation_rewriter::_impl::
+materialize_portion(const frag_info &fi, const arg_ref_edit &re,
+		    const std::size_t p_begin, const std::size_t p_end,
+		    const std::size_t g_begin, const std::size_t g_end) const
+{
+  std::vector<mat_token> mat;
+  for (std::size_t p = p_begin; p <= p_end; ++p) {
+    if (g_begin <= p && p <= g_end) {
+      for (const auto &ins : re.gaps[p])
+	emit_insertion(ins, mat);
+    }
+    if (p == p_end)
+      break;
+    emit_token_edit(re.tok_edits[p], fi.b() + p, mat);
+  }
+  return mat;
+}
+
 std::vector<rewritten_macro_token>
 rescan_macro_invocation_rewriter::_impl::
 finalize_mat_tokens(std::vector<mat_token> &&mat,
@@ -7320,6 +8489,10 @@ check_representable(const std::vector<rewritten_macro_token> &toks) const
 {
   for (const auto &t : toks) {
     if (t.rename_ref != invalid_rewritten_macro_definition_id)
+      continue;
+    // '##' operators synthesized for pasting onto a parameter are
+    // fine, c.f. rewritten_macro_token::is_pp_operator.
+    if (t.is_pp_operator)
       continue;
     if (t.tok.is_punctuator("#") || t.tok.is_punctuator("##")) {
       throw macro_rewriting_failure{
@@ -7468,51 +8641,69 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 				      static_cast<rrmi_index>(arg_root));
       }
 
-      for (const auto &lr : ai.lower_rewrites) {
-	const auto &finfo = _frags[lr.first];
-	const auto &ar = _arg_rewrites[lr.second];
-	// Find a rescan child consuming the reference's range as
-	// (part of) one of its arguments.
-	rrmi_index parent_rrmi = static_cast<rrmi_index>(_rrmi);
-	std::size_t pos = finfo.b();
-	const std::size_t *pos_override = &pos;
-	const auto st = static_cast<expansion_forest::rescan_subtree>(_rmi);
-	bool found = false;
-	for (auto it = st.dfs_pre_begin(); it != st.dfs_pre_end() && !found;
-	     ++it) {
-	  const rescan_macro_invocation c = *it;
-	  if (c.is_arg_tree_root() ||
-	      (static_cast<original_node>(c) ==
-	       static_cast<original_node>(_rmi)) ||
-	      (static_cast<original_node>(c.get_rescan_parent()) !=
-	       static_cast<original_node>(_rmi))) {
-	    continue;
-	  }
-	  const std::size_t c_nargs = c.get_nargs();
-	  for (std::size_t j = 0; j < c_nargs && !found; ++j) {
-	    const auto &r =
-	      static_cast<rescan_macro_invocation>(c.get_arg_tree(j))
-	      .get_src_range();
-	    if (r.begin <= finfo.b() && finfo.e() <= r.end) {
-	      for (const auto &ch : _children) {
-		if (_forest.get_rewritten_rescan_macro_invocation(ch.child_rrmi)
-		    .get_original() == static_cast<original_node>(c)) {
-		  const auto root = _forest.get_arg_tree_root(ch.child_rrmi, j);
-		  if (root != rrmi_index::invalid()) {
-		    parent_rrmi = root;
-		    pos_override = nullptr;
-		    found = true;
+      // Attach the lowered content of a reference (the whole
+      // reference or a served reference's outside portions) to the
+      // rescan child consuming the reference's range as (part of) one
+      // of its arguments, or to this invocation otherwise.
+      const auto attach_lowered =
+	[&](const std::size_t fi, const arg_rewrite &ar) {
+	  const auto &finfo = _frags[fi];
+	  rrmi_index parent_rrmi = static_cast<rrmi_index>(_rrmi);
+	  std::size_t pos = finfo.b();
+	  const std::size_t *pos_override = &pos;
+	  const auto it_lc = lowered_contexts.find(fi);
+	  if (it_lc != lowered_contexts.end()) {
+	    parent_rrmi = it_lc->second;
+	    if (parent_rrmi != static_cast<rrmi_index>(_rrmi))
+	      pos_override = nullptr;
+	  } else {
+	    const auto st = static_cast<expansion_forest::rescan_subtree>(_rmi);
+	    bool found = false;
+	    for (auto it = st.dfs_pre_begin(); it != st.dfs_pre_end() && !found;
+		 ++it) {
+	      const rescan_macro_invocation c = *it;
+	      if (c.is_arg_tree_root() ||
+		  (static_cast<original_node>(c) ==
+		   static_cast<original_node>(_rmi)) ||
+		  (static_cast<original_node>(c.get_rescan_parent()) !=
+		   static_cast<original_node>(_rmi))) {
+		continue;
+	      }
+	      const std::size_t c_nargs = c.get_nargs();
+	      for (std::size_t j = 0; j < c_nargs && !found; ++j) {
+		const auto &r =
+		  static_cast<rescan_macro_invocation>(c.get_arg_tree(j))
+		  .get_src_range();
+		if (r.begin <= finfo.b() && finfo.e() <= r.end) {
+		  for (const auto &ch : _children) {
+		    if (_forest.get_rewritten_rescan_macro_invocation(ch.child_rrmi)
+			.get_original() == static_cast<original_node>(c)) {
+		      const auto root = _forest.get_arg_tree_root(ch.child_rrmi, j);
+		      if (root != rrmi_index::invalid()) {
+			parent_rrmi = root;
+			pos_override = nullptr;
+			found = true;
+		      }
+		      break;
+		    }
 		  }
-		  break;
 		}
 	      }
 	    }
+	    lowered_contexts.emplace(fi, parent_rrmi);
 	  }
-	}
-	link_top_level(parent_rrmi,
-		       ar.result.top_level_rewritten_rescan_macro_invocations,
-		       pos_override);
-	lowered_contexts.emplace(lr.first, parent_rrmi);
+	  link_top_level(parent_rrmi,
+			 ar.result.top_level_rewritten_rescan_macro_invocations,
+			 pos_override);
+	};
+
+      for (const auto &lr : ai.lower_rewrites)
+	attach_lowered(lr.first, _arg_rewrites[lr.second]);
+      for (const auto &sm : ai.served_material) {
+	if (sm.second.left_lower != arg_info::none)
+	  attach_lowered(sm.first, _arg_rewrites[sm.second.left_lower]);
+	if (sm.second.right_lower != arg_info::none)
+	  attach_lowered(sm.first, _arg_rewrites[sm.second.right_lower]);
       }
     }
   }
@@ -7544,6 +8735,15 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	rewritten_m_builder.insert(raw_pos, ins.stickiness, std::move(toks));
       }
     };
+
+  // Definition level insertions are placed before resp. after the
+  // fragment they're attached to. The builder orders edits at the
+  // same position by insertion order, so emit those preceding their
+  // fragment before any fragment's own material and the others after.
+  for (const auto &dli : _def_level_insertions) {
+    if (dli.second.stickiness != sticky_side::left)
+      push_insertion_edit(dli.first, dli.second);
+  }
 
   for (std::size_t fi = 0; fi < _frags.size(); ++fi) {
     const auto &finfo = _frags[fi];
@@ -7598,6 +8798,29 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	const std::size_t i = f.get_arg_ref_fragment().get_arg_index();
 	const auto &ai = _args[i];
 	const auto it_lower = ai.lower_rewrites.find(fi);
+	const auto it_mat = ai.served_material.find(fi);
+
+	// Materialize the lowered (rewritten) argument source of a
+	// completed lowering rewrite and finalize its traces in the
+	// context the lowered content got attached to.
+	const auto lower_portion =
+	  [&](const arg_rewrite &ar) {
+	    assert(ar.started);
+	    const auto arg_root =
+	      static_cast<rescan_macro_invocation>(_rmi.get_arg_tree(i));
+	    const auto src_toks = collect_src_tokens(_forest, arg_root, true);
+	    auto toks = materialize_src_edit(_forest, ar.result.src_edit_script,
+					     src_toks);
+	    const auto it_lc = lowered_contexts.find(fi);
+	    assert(it_lc != lowered_contexts.end());
+	    for (const auto &tr :
+		   ar.result.unexpanded_macro_id_out_tokens_origin_traces) {
+	      finalize_trace(_forest, tr.unexpanded_macro_id_out_token,
+			     it_lc->second);
+	    }
+	    return toks;
+	  };
+
 	if (std::find(ai.verbatim_arg_refs.begin(), ai.verbatim_arg_refs.end(), fi) !=
 	    ai.verbatim_arg_refs.end()) {
 	  // Place the reference's (edited) expansion result into the
@@ -7611,35 +8834,96 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	} else if (it_lower != ai.lower_rewrites.end()) {
 	  // Lower the (separately rewritten) argument into the
 	  // replacement list in place of the reference.
-	  auto &ar = _arg_rewrites[it_lower->second];
-	  assert(ar.started);
-	  const auto arg_root =
-	    static_cast<rescan_macro_invocation>(_rmi.get_arg_tree(i));
-	  const auto src_toks = collect_src_tokens(_forest, arg_root, true);
-	  auto toks = materialize_src_edit(_forest, ar.result.src_edit_script,
-					   src_toks);
-	  const auto it_lc = lowered_contexts.find(fi);
-	  assert(it_lc != lowered_contexts.end());
-	  for (const auto &tr :
-		 ar.result.unexpanded_macro_id_out_tokens_origin_traces) {
-	    finalize_trace(_forest, tr.unexpanded_macro_id_out_token,
-			   it_lc->second);
-	  }
+	  auto toks = lower_portion(_arg_rewrites[it_lower->second]);
 	  check_representable(toks);
 	  rewritten_m_builder.replace(raw_pp_tokens_range{repl.begin(), repl.begin() + 1},
 			      std::move(toks));
 	} else {
 	  // The argument is referenced through the parameter, either
-	  // as is or with the common edits pushed down into it. Each
-	  // reference is a separate copy of the argument's tokens in
-	  // the output, with the recursing origins given by the
-	  // emitting node within the argument's expansion tree (and
-	  // its ancestors, including this invocation). Finalize the
-	  // _traces of all the tokens attributed to this reference
-	  // accordingly. Note that for pushed down edits, the first
-	  // reference's _traces also travel with the argument tree
-	  // cursor and get finalized there as well, with an equivalent
-	  // context.
+	  // as is or with the common edits pushed down into it, with
+	  // the range X of the expansion result retained in the
+	  // argument. The reference's edited material outside of X, if
+	  // any, gets placed next to the parameter reference, together
+	  // with any wrap/paste tokens.
+	  const std::size_t r =
+	    (std::find(ai.expanded_arg_refs.begin(), ai.expanded_arg_refs.end(),
+		       fi) -
+	     ai.expanded_arg_refs.begin());
+	  assert(r < ai.ref_edits.size());
+	  const arg_ref_edit &re = ai.ref_edits[r];
+	  const std::size_t b = ai.x_begin;
+	  const std::size_t e = ai.x_end;
+	  const std::size_t alen = re.tok_edits.size();
+	  if (it_mat != ai.served_material.end()) {
+	    const auto &mat = it_mat->second;
+	    std::vector<rewritten_macro_token> pre_toks;
+	    std::vector<rewritten_macro_token> post_toks;
+	    if (mat.left_lower != arg_info::none) {
+	      pre_toks = lower_portion(_arg_rewrites[mat.left_lower]);
+	    } else if (mat.left_verbatim) {
+	      pre_toks = finalize_mat_tokens(materialize_portion(finfo, re, 0, b,
+								0, b),
+					     static_cast<rrmi_index>(_rrmi));
+	    }
+	    for (const auto &t : mat.wrap_pre)
+	      pre_toks.emplace_back(normalize_src_token(t));
+	    if (!mat.paste_prefix.empty()) {
+	      // 'prefix ## x': the prefix is the head of an identifier
+	      // and thus, an identifier itself.
+	      pre_toks.emplace_back(pp_token{pp_token::type::id,
+					     mat.paste_prefix});
+	      pre_toks.emplace_back(pp_token{pp_token::type::punctuator, "##"},
+				    rewritten_macro_token::pp_operator_tag{});
+	    }
+	    if (!mat.paste_suffix.empty()) {
+	      // 'x ## suffix': the suffix is the tail of an identifier,
+	      // which may well start with a digit.
+	      post_toks.emplace_back(pp_token{pp_token::type::punctuator, "##"},
+				     rewritten_macro_token::pp_operator_tag{});
+	      const bool is_num = std::isdigit(static_cast<unsigned char>
+					       (mat.paste_suffix.front()));
+	      post_toks.emplace_back(pp_token{(is_num ?
+					       pp_token::type::pp_number :
+					       pp_token::type::id),
+					      mat.paste_suffix});
+	    }
+	    for (const auto &t : mat.wrap_post)
+	      post_toks.emplace_back(normalize_src_token(t));
+	    if (mat.right_lower != arg_info::none) {
+	      auto toks = lower_portion(_arg_rewrites[mat.right_lower]);
+	      post_toks.insert(post_toks.end(),
+			       std::make_move_iterator(toks.begin()),
+			       std::make_move_iterator(toks.end()));
+	    } else if (mat.right_verbatim) {
+	      auto toks = finalize_mat_tokens(materialize_portion(finfo, re,
+								 e, alen,
+								 e, alen),
+					      static_cast<rrmi_index>(_rrmi));
+	      post_toks.insert(post_toks.end(),
+			       std::make_move_iterator(toks.begin()),
+			       std::make_move_iterator(toks.end()));
+	    }
+	    // The wrapped tokens' replacements appear in this
+	    // invocation's output.
+	    for (const auto t : mat.wrap_traces)
+	      finalize_trace(_forest, t, static_cast<rrmi_index>(_rrmi));
+	    check_representable(pre_toks);
+	    check_representable(post_toks);
+	    rewritten_m_builder.insert(repl.begin(), sticky_side::right,
+				       std::move(pre_toks));
+	    rewritten_m_builder.insert(repl.begin() + 1, sticky_side::left,
+				       std::move(post_toks));
+	  }
+
+	  // Each reference is a separate copy of the argument's
+	  // tokens in the output, with the recursing origins given by
+	  // the emitting node within the argument's expansion tree
+	  // (and its ancestors, including this invocation). Finalize
+	  // the _traces of all the tokens within X attributed to this
+	  // reference accordingly. Note that for pushed down edits,
+	  // the first reference's _traces also travel with the
+	  // argument tree cursor and get finalized there as well, with
+	  // an equivalent context.
 	  const auto arg_tree = _rmi.get_arg_tree(i);
 	  const rrmi_index arg_root_rrmi = arg_root_rrmis[i];
 	  // The rewritten node in this argument's context for an
@@ -7660,25 +8944,33 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 		  finalize_trace(_forest, tr.second, context);
 	      }
 	    };
-	  finalize_ins_traces(finfo.head_ins, arg_root_rrmi);
+	  const auto wrapped_at =
+	    [&](const std::size_t rel) {
+	      if (it_mat == ai.served_material.end())
+		return false;
+	      return ((rel == b && it_mat->second.wrap_first) ||
+		      (rel + 1 == e && it_mat->second.wrap_last));
+	    };
+	  if (ai.x_head)
+	    finalize_ins_traces(finfo.head_ins, arg_root_rrmi);
 	  auto it_seg = arg_tree.final_out_begin();
 	  const auto seg_end = arg_tree.final_out_end();
 	  std::size_t seg_begin = 0;
 	  std::size_t seg_length =
 	    (it_seg != seg_end ?
 	     (*it_seg).get_out_range_in_emitting_node().length() : 0);
-	  for (std::size_t p = finfo.b(); p < finfo.e(); ++p) {
-	    const auto &te = _tok_edits[p];
-	    const bool any_traces =
-	      (!te.traces.empty() ||
-	       (p != finfo.b() &&
-		std::any_of(_gap_insertions[p].begin(), _gap_insertions[p].end(),
-			    [](const insertion &ins) {
-			      return !ins.traces.empty();
-			    })));
-	    if (!any_traces)
-	      continue;
+	  for (std::size_t p = finfo.b() + b; p < finfo.b() + e; ++p) {
 	    const std::size_t rel = p - finfo.b();
+	    const auto &te = _tok_edits[p];
+	    const bool tok_traces = !te.traces.empty() && !wrapped_at(rel);
+	    const bool gap_traces =
+	      (rel != b &&
+	       std::any_of(_gap_insertions[p].begin(), _gap_insertions[p].end(),
+			   [](const insertion &ins) {
+			     return !ins.traces.empty();
+			   }));
+	    if (!tok_traces && !gap_traces)
+	      continue;
 	    while (it_seg != seg_end && rel >= seg_begin + seg_length) {
 	      seg_begin += seg_length;
 	      ++it_seg;
@@ -7689,12 +8981,15 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	    const rrmi_index context =
 	      (it_seg != seg_end ?
 	       context_for((*it_seg).get_emitting_node()) : arg_root_rrmi);
-	    if (p != finfo.b())
+	    if (gap_traces)
 	      finalize_ins_traces(_gap_insertions[p], context);
-	    for (const auto &tr : te.traces)
-	      finalize_trace(_forest, tr.second, context);
+	    if (tok_traces) {
+	      for (const auto &tr : te.traces)
+		finalize_trace(_forest, tr.second, context);
+	    }
 	  }
-	  finalize_ins_traces(finfo.tail_ins, arg_root_rrmi);
+	  if (ai.x_tail)
+	    finalize_ins_traces(finfo.tail_ins, arg_root_rrmi);
 	}
       }
       break;
@@ -7741,8 +9036,10 @@ rescan_macro_invocation_rewriter::_impl::finalize()
     }
   }
 
-  for (const auto &dli : _def_level_insertions)
-    push_insertion_edit(dli.first, dli.second);
+  for (const auto &dli : _def_level_insertions) {
+    if (dli.second.stickiness == sticky_side::left)
+      push_insertion_edit(dli.first, dli.second);
+  }
 
   const bool force_rename = _forest.is_rename_forced(m);
   if (!rewritten_m_builder.empty() || force_rename) {

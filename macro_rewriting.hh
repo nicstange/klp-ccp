@@ -63,12 +63,19 @@ namespace klp
     // definition's replacement list or into a rewritten macro
     // invocation's source. If rename_ref is valid, the token is a
     // macro identifier which is to be replaced by the name assigned to
-    // the referenced rewritten macro definition.
+    // the referenced rewritten macro definition. If is_pp_operator is
+    // set, the token is a '##' operator synthesized by the rewriter
+    // for pasting a prefix or suffix onto a parameter's argument, as
+    // opposed to a literal '##' punctuator from some expansion output
+    // (which cannot be represented in a replacement list).
     struct rewritten_macro_token
     {
+      struct pp_operator_tag {};
+
       rewritten_macro_token(const pp_token &_tok);
       rewritten_macro_token(const pp_token &_tok,
 			    const rewritten_macro_definition_id _rename_ref);
+      rewritten_macro_token(const pp_token &_tok, const pp_operator_tag&);
 
       bool operator==(const rewritten_macro_token &rhs) const noexcept;
 
@@ -77,6 +84,7 @@ namespace klp
 
       pp_token tok;
       rewritten_macro_definition_id rename_ref;
+      bool is_pp_operator;
     };
 
     class rewritten_macro_definition

@@ -3,19 +3,21 @@ struct s { int X; };
 struct s X_s;
 static int (*klpe_espr_i);
 
-#define KLPR_X1 (espr_i + X_s.X)
+#define KLPR_X2 (
 
-#define KLPR_X0 ((*klpe_espr_i) + X_s.X)
+#define KLPR_X1 (*klpe_espr_i) + X_s.X)
+
+#define KLPR_X0 espr_i + X_s.X)
 
 #define KLPR_TWICE(y)			\
-	a = KLPR_X0;				\
+	y KLPR_X1;				\
 	{				\
 		int espr_i;		\
-		y;			\
+		y KLPR_X0;			\
 	}
 
 void klpp_pu_f(void)
 {
 	int a;
-	KLPR_TWICE(a = KLPR_X1);
+	KLPR_TWICE(a = KLPR_X2);
 }

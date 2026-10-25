@@ -1078,6 +1078,10 @@ namespace klp
 
 		      ~concatenated_tokens() noexcept;
 
+		      const std::vector<concatenated_token_origin>&
+		      get_origins() const noexcept
+		      { return _concatenated_tokens_origins; }
+
 		    private:
 		      friend class concat_sequence;
 

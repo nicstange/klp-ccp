@@ -6,7 +6,7 @@
 static int (*klpe_espr_i);
 
 /* klp-ccp: not from file */
-#define KLPR_FOO(x) __concat(__foo_, x), (*klpe_espr_i)
+#define KLPR_FOO(x) __concat(__foo_, x), (*klpe_##x)
 
 /* klp-ccp: from testsuite/ccp/macros-29.c */
 void klpp_pu_f(void)
