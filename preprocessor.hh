@@ -241,7 +241,6 @@ namespace klp
 
       std::queue<pp_token> _expanded_tokens;
       bool _maybe_pp_directive;
-      bool _line_empty;
       bool _eof;
       raw_pp_token_index _eof_index;
       raw_pp_token_index _peeked_begin;

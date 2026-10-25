@@ -915,7 +915,6 @@ expansion_forest::rescan_output_segment::const_fragment_iterator::operator*()
 {
   using rescan_macro_invocation_output =
     expansion_forest::rescan_macro_invocation::output;
-  using fragment = rescan_macro_invocation_output::fragment;
   using rescan_macro_invocation_output_range =
     rescan_macro_invocation_output::tokens_range;
 
@@ -4795,7 +4794,6 @@ _fwd_walk_stack_to_node_kind()
 {
   // Move the walk stack to the next (in DFS post order) node of the
   // desired kind.
-  typedef inclusion_node::_child _child;
   assert(!_walk_stack.empty());
   assert(_walk_stack.back().chlds_it != _walk_stack.back().chlds_end);
   while (!_walk_stack.empty() &&

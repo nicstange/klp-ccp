@@ -535,7 +535,6 @@ _directive_range_to_pos_in_chunk(const raw_pp_tokens_range &directive_range,
   // (conditional inclusion) directive intersecting with some
   // (func-like) macro invocation, this pp_token will be the first one
   // within the copy op range stemming from said macro expansion.
-  const pp_tokens_range &op_range= overlapping_ops.first->r;
   const auto first_tok_not_before_index =
     pp_result.raw_pp_tokens_range_to_nonraw(directive_range).begin;
   assert(first_tok_not_before_index != pp_result.get_pp_tokens().size());
@@ -784,7 +783,6 @@ _insert_cond_incl_transition(const pp_result::conditional_inclusion_node &c,
     return;
   }
 
-  const pp_tokens &toks = pp_result.get_pp_tokens();
   assert(it_op == _ops.begin() + first_pos_not_less.op);
   const pp_token_index insertion_pos = first_pos_not_less.tok;
   const raw_pp_tokens_range &tok_range_raw =
@@ -1925,9 +1923,7 @@ _write(source_writer &writer, _output_state &state,
 	    (std::find_if_not
 	     (_ops.begin() + cur_pos.op + 1, _ops.end(),
 	      [&](const _op &cur_op) {
-	       const raw_pp_tokens_range &cur_r =
-		 cur_op.get_range_raw(pp_result);
-	       return (r.is_contained_in(cur_op.get_range_raw(pp_result)));
+	       return r.is_contained_in(cur_op.get_range_raw(pp_result));
 	      }) - _ops.begin());
 
 	    if (spanning_ops_end > cur_pos.op + 1 &&
@@ -2295,7 +2291,6 @@ get_range_raw(const pp_result &pp_result)
     // raw_pp_token_index corresponding to the beginning of the next pp_token
     // subsequent to the insertion position in this case.
     {
-      const pp_tokens &toks = pp_result.get_pp_tokens();
       assert(r.begin == r.end);
       const auto raw_range = pp_result.pp_tokens_range_to_raw(r);
       if (raw_range.begin != raw_range.end) {
@@ -2521,7 +2516,6 @@ find_macro_constraints(const pp_result &pp_result)
 	const raw_pp_token_index pos) {
       // Avoid adding nondef constraints for macros #undefined in this
       // header prior to pos.
-      const auto undefs = all_undefs.equal_range(mnc.get_name());
       auto it_mu = all_undefs.find(mnc.get_name());
       if (it_mu != all_undefs.end() &&
 	  (it_mu->second.get().get_directive_range()

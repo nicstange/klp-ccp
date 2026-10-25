@@ -99,7 +99,7 @@ preprocessor::preprocessor(const header_resolver &header_resolver,
     _cond_incl_nesting(0), __counter__(0),
     _m_defined_op(_pp_result->_add_macro("defined", {"identifier"},
 				 pp_result::macro::builtin_special_tag{})),
-    _maybe_pp_directive(true), _line_empty(true),
+    _maybe_pp_directive(true),
     _eof(false), _eof_index(std::numeric_limits<raw_pp_token_index>::max()),
     _peeked_begin(_none_peeked)
 {
