@@ -1333,6 +1333,18 @@ std::size_t expansion_forest::rescan_macro_invocation::out_length()
   return _ref.deref().out_length();
 }
 
+const expansion_forest::rescan_macro_invocation::output::tokens_range&
+expansion_forest::rescan_macro_invocation::get_src_range() const noexcept
+{
+  return _ref.deref().get_source_range();
+}
+
+std::size_t expansion_forest::rescan_macro_invocation::get_nargs()
+  const noexcept
+{
+  return _ref.deref().nargs();
+}
+
 expansion_forest::rescan_macro_invocation::output::fragment::repl_ref::
 repl_ref() noexcept
   : _begin(std::numeric_limits<std::size_t>::max()), _length(0)

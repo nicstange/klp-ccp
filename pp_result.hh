@@ -1375,6 +1375,15 @@ namespace klp
 	    // length of the (identity mapped) unexpanded argument.
 	    std::size_t out_length() const noexcept;
 
+	    // The invocation's source range. For rescan children,
+	    // relative to the rescan parent's output, for argument
+	    // tree roots relative to the owner's rescan parent's
+	    // output, and relative to the invocation_source otherwise.
+	    const output::tokens_range& get_src_range() const noexcept;
+
+	    // Number of arguments collected for this invocation.
+	    std::size_t get_nargs() const noexcept;
+
 	  private:
 	    friend class expansion_forest;
 
