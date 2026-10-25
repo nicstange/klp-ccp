@@ -309,10 +309,10 @@ namespace klp
 	void _remove_redundant_macro_constraints();
 
 	void
-	_try_rewrite_macro_invocation(const pp_result &pp_result,
-				      const pp_result::macro_invocation &mi,
-				      depreprocessor &d,
-				      const bool next_raw_tok_after_chunk_is_lparen);
+	_rewrite_macro_invocation(const pp_result &pp_result,
+				  const pp_result::macro_invocation &mi,
+				  depreprocessor &d,
+				  const bool next_raw_tok_after_chunk_is_lparen);
 
 	void _add_macro_undef_to_emit(const _pos_in_chunk &pos,
 				      _macro_undef_to_emit &&mu);
@@ -336,7 +336,6 @@ namespace klp
 	_used_macros_in_chunk_type _used_macros_in_chunk;
 	_macro_nondef_constraints_in_chunk_type
 	  _macro_nondef_constraints_in_chunk;
-	std::vector<pp_tokens_range> _ranges_to_emit_expanded;
 	_macro_undefs_to_emit_type _macro_undefs_to_emit;
 	_macro_defines_to_emit_type _macro_defines_to_emit;
       };

@@ -25,6 +25,7 @@
 #include "output_remarks.hh"
 #include "code_remarks.hh"
 #include "code_remark.hh"
+#include "lp_except.hh"
 #include <tuple>
 
 using namespace klp::ccp;
@@ -845,11 +846,14 @@ _find_macro_constraints(const pp_result &pp_result,
     return std::make_pair(mis.first.first, mis.second.first);
   }();
 
-  // First try to turn edits on expanded macro invocations into
-  // rewritten macro invocations, if possible.
+  // First turn edits on expanded macro invocations into rewritten
+  // macro invocations. Afterwards, any macro invocation still
+  // overlapping with some copy op is either completely contained in
+  // it and retained as is or has been replaced by a
+  // rewrite_macro_invocation op.
   for (auto it_mi = mis.first; it_mi != mis.second; ++it_mi) {
-    _try_rewrite_macro_invocation(pp_result, *it_mi, d,
-				  next_raw_tok_is_opening_parenthesis);
+    _rewrite_macro_invocation(pp_result, *it_mi, d,
+			      next_raw_tok_is_opening_parenthesis);
   }
 
   // Function-like macros get expanded by the preprocessor depending
@@ -1060,36 +1064,11 @@ _find_macro_constraints(const pp_result &pp_result,
 	      next_raw_tok_is_opening_parenthesis = false;
 
 	    } else {
-	      // This macro invocation can't get retained as is
-	      // because it isn't covered completely by the copy op's
-	      // range.
-
-	      // Crop the macro invocation range to the copied range.
-	      const pp_tokens_range intersecting_range{
-		std::max(mi_output_range.begin, it_op->r.begin),
-		std::min(mi_output_range.end, it_op->r.end)
-	      };
-
-	      // Add a record that the expanded tokens in this range
-	      // shall be emitted verbatim.
-	      _ranges_to_emit_expanded.push_back(intersecting_range);
-
-	      // Treat the intersecting pp_tokens as if they didn't
-	      // originate from any macro invocation at all, in
-	      // particular, register macro_nondef_constraints as
-	      // appropriate.
-	      assert(intersecting_range.end == _cur_tok_index);
-	      while (_cur_tok_index > intersecting_range.begin) {
-		handle_nonexpanded_token(toks[_cur_tok_index - 1],
-					 _cur_tok_index - 1);
-		--_cur_tok_index;
-	      }
-
-	      // The mi_output_range might also overlap with some
-	      // preceeding copy operation. Give it a chance to
-	      // record the intersection if that's the case.
-	      if (mi_output_range.begin >= it_op->r.begin)
-		--_it_mi;
+	      // A macro invocation not covered completely by a single
+	      // copy op would have been rewritten above and its ops
+	      // replaced by a rewrite_macro_invocation op.
+	      assert(0);
+	      __builtin_unreachable();
 	    }
 	  }
 	}
@@ -1154,9 +1133,6 @@ _find_macro_constraints(const pp_result &pp_result,
   std::reverse(_used_macros_in_chunk.begin(), _used_macros_in_chunk.end());
   std::reverse(_macro_nondef_constraints_in_chunk.begin(),
 	       _macro_nondef_constraints_in_chunk.end());
-  std::reverse(_ranges_to_emit_expanded.begin(),
-	       _ranges_to_emit_expanded.end());
-  _ranges_to_emit_expanded.shrink_to_fit();
 
   // The redundancy elimination among the records collected above
   // compares macro names and thus has to wait until the rewritten
@@ -1244,10 +1220,10 @@ _remove_redundant_macro_constraints()
 }
 
 void depreprocessor::transformed_input_chunk::
-_try_rewrite_macro_invocation(const pp_result &pp_result,
-			      const pp_result::macro_invocation &mi,
-			      depreprocessor &d,
-			      const bool next_raw_tok_after_chunk_is_lparen)
+_rewrite_macro_invocation(const pp_result &pp_result,
+			  const pp_result::macro_invocation &mi,
+			  depreprocessor &d,
+			  const bool next_raw_tok_after_chunk_is_lparen)
 {
   const auto &range_raw = mi.get_source_range();
   auto overlapping_ops = _find_overlapping_ops_range(range_raw, pp_result);
@@ -1460,17 +1436,20 @@ _try_rewrite_macro_invocation(const pp_result &pp_result,
   if (!rewrite_macro_invocation(pp_result, mi, out_edits, next_tok_is_lparen,
 				d._macro_ids, d._rewritten_macro_defs,
 				d._rewritten_mis.back(), error_msg)) {
-    d._rewritten_mis.pop_back();
-    d._remarks.add(output_remark{
-	output_remark::severity::warning,
-	0,
-	("unable to rewrite invocation of macro \"" +
-	 mi.get_expansion_forest().get_main_tree()
-	 .operator pp_result::macro_invocation::expansion_forest::
-	   rescan_macro_invocation().get_macro().get_name() +
-	 "\": " + error_msg + ", emitting expanded tokens")
-      });
-    return;
+    // Can't happen for valid input and the edits the live patch
+    // writer produces, c.f. the commit introducing this.
+    code_remark remark{
+      code_remark::severity::fatal,
+      ("unable to rewrite invocation of macro \"" +
+       mi.get_expansion_forest().get_main_tree()
+       .operator pp_result::macro_invocation::expansion_forest::
+	 rescan_macro_invocation().get_macro().get_name() +
+       "\": " + error_msg),
+      pp_result,
+      range_raw
+    };
+    d._code_remarks.add(remark);
+    throw lp_except(remark);
   }
   const std::size_t rewritten_mi_index = d._rewritten_mis.size() - 1;
 
@@ -1695,7 +1674,6 @@ _write(source_writer &writer, _output_state &state,
 
   std::vector<_ops_type::size_type> cond_incl_trans_in_mi;
   const _pos_in_chunk end_pos = _end_pos_in_chunk();
-  auto it_range_to_emit_expanded = _ranges_to_emit_expanded.cbegin();
   const auto directives = pp_result.find_overlapping_directives(range_raw);
   auto it_directive = directives.first;
   bool at_beginning = true;
@@ -1706,12 +1684,8 @@ _write(source_writer &writer, _output_state &state,
       while(cur_pos.tok != op.r.end) {
 	// Copy operations are special in that there might be some
 	// #define/#undef directives to get emitted at an interior
-	// point.  Moreover, they're partitioned into runs of tokens
-	// to get emitted either raw, i.e. copied verbatim from the
-	// source files, or expanded. find_batch_end() returns the
-	// next stop where either #defines or #undefs are to be placed
-	// or where there's a change from raw to expanded mode or vice
-	// versa.
+	// point. find_next_stop() returns the next stop where either
+	// #defines or #undefs are to be placed.
 	auto find_next_stop =
 	  [&]() -> pp_token_index {
 	    pp_token_index next_stop = op.r.end;
@@ -1724,185 +1698,112 @@ _write(source_writer &writer, _output_state &state,
 		it_md->pos.op == cur_pos.op) {
 	      next_stop = std::min(it_md->pos.tok, next_stop);
 	    }
-	    if (it_range_to_emit_expanded != _ranges_to_emit_expanded.cend()) {
-	      if (cur_pos.tok < it_range_to_emit_expanded->begin) {
-		next_stop = std::min(it_range_to_emit_expanded->begin,
-				     next_stop);
-	      }
-	    }
 	    return next_stop;
 	  };
 
 	write_mus_and_mds_at_cur_pos();
 
 	const pp_token_index next_stop = find_next_stop();
-	if (it_range_to_emit_expanded == _ranges_to_emit_expanded.cend() ||
-	    cur_pos.tok < it_range_to_emit_expanded->begin) {
-	  // Copy the raw tokens, leave out any preprocessor
-	  // directives in the source file. Note that the
-	  // raw_pp_tokens_range might originate from more than one
-	  // source file. So copy in batches, each spanning the
-	  // region from the last one's end up to either the next
-	  // directive or needed source file switch.
-	  raw_pp_tokens_range batch_range_raw
-	    = pp_result.pp_tokens_range_to_raw(pp_tokens_range{
-							cur_pos.tok,
-							next_stop
-					       });
+	// Copy the raw tokens, leave out any preprocessor
+	// directives in the source file. Note that the
+	// raw_pp_tokens_range might originate from more than one
+	// source file. So copy in batches, each spanning the
+	// region from the last one's end up to either the next
+	// directive or needed source file switch.
+	raw_pp_tokens_range batch_range_raw
+	  = pp_result.pp_tokens_range_to_raw(pp_tokens_range{
+						      cur_pos.tok,
+						      next_stop
+					     });
 
-	  auto it_cond_incl_trans_in_mi = cond_incl_trans_in_mi.begin();
-	  assert(cond_incl_trans_in_mi.empty() ||
-		 cur_pos.tok == op.r.begin);
-	  assert(std::all_of(cond_incl_trans_in_mi.begin(),
-			     cond_incl_trans_in_mi.end(),
-			     [&](const _ops_type::size_type &op_index) {
-			       const _op &trans_op = _ops[op_index];
-			       const raw_pp_tokens_range &r
-				 = (depreprocessor::
-				    _get_cond_incl_trans_range_raw
-				    (*trans_op.cond_incl_node,
-				     trans_op.cond_incl_trans_kind));
-			       return r.is_contained_in(batch_range_raw);
-			     }));
+	auto it_cond_incl_trans_in_mi = cond_incl_trans_in_mi.begin();
+	assert(cond_incl_trans_in_mi.empty() ||
+	       cur_pos.tok == op.r.begin);
+	assert(std::all_of(cond_incl_trans_in_mi.begin(),
+			   cond_incl_trans_in_mi.end(),
+			   [&](const _ops_type::size_type &op_index) {
+			     const _op &trans_op = _ops[op_index];
+			     const raw_pp_tokens_range &r
+			       = (depreprocessor::
+				  _get_cond_incl_trans_range_raw
+				  (*trans_op.cond_incl_node,
+				   trans_op.cond_incl_trans_kind));
+			     return r.is_contained_in(batch_range_raw);
+			   }));
 
-	  while (batch_range_raw.begin != batch_range_raw.end) {
-	    if (at_beginning) {
-	      if (write_newlines) {
-		_write_newlines(writer, state, batch_range_raw.begin, false,
-				pp_result, source_reader_cache);
-	      }
-	      at_beginning = false;
-	      write_newlines = true;
-	    }
-
-	    raw_pp_token_index copy_end = batch_range_raw.end;
-	    if (it_cond_incl_trans_in_mi != cond_incl_trans_in_mi.end()) {
-	      const _op &trans_op = _ops[*it_cond_incl_trans_in_mi];
-	      const raw_pp_tokens_range &r =
-		(depreprocessor::_get_cond_incl_trans_range_raw
-		 (*trans_op.cond_incl_node, trans_op.cond_incl_trans_kind));
-	      if (batch_range_raw.begin == r.begin) {
-		depreprocessor::
-		  _write_cond_incl_transition(writer, state,
-					      *trans_op.cond_incl_node,
-					      trans_op.cond_incl_trans_kind,
-					      write_newlines,
-					      pp_result,
-					      source_reader_cache,
-					      remarks);
-		batch_range_raw.begin = r.end;
-		++it_cond_incl_trans_in_mi;
-		continue;
-	      } else {
-		assert(r.end <= copy_end);
-		copy_end = r.end;
-	      }
-	    }
-
-	    while (it_directive != directives.second &&
-		   it_directive->get_source_range() < batch_range_raw) {
-	      ++it_directive;
-	    }
-	    if (it_directive != directives.second) {
-	      const raw_pp_tokens_range &directive_range
-		= it_directive->get_source_range();
-	      if (directive_range.begin == batch_range_raw.begin) {
-		batch_range_raw.begin = directive_range.end;
-		continue;
-	      } else {
-		copy_end = std::min(directive_range.begin, copy_end);
-	      }
-	    }
-
-	    advance_source_to(batch_range_raw.begin);
-	    _set_input_file(writer, state, &*it_source);
-	    copy_end = std::min(cur_source_range.end, copy_end);
-	    assert(copy_end != batch_range_raw.begin);
-	    const raw_pp_tokens &raw_toks = pp_result.get_raw_tokens();
-	    writer.append
-	      (source_reader_cache.get(*it_source),
-	       range_in_file{
-		      raw_toks[batch_range_raw.begin].get_range_in_file().begin,
-		      raw_toks[copy_end - 1].get_range_in_file().end
-	       });
-	    batch_range_raw.begin = copy_end;
-
-	    const raw_pp_token& last_tok = raw_toks[copy_end - 1];
-	    state.last_input_pos_raw = copy_end;
-	    state.last_was_newline = last_tok.is_newline();
-	    skip_following_insert_ws = (last_tok.is_punctuator("(") ||
-					last_tok.is_punctuator("[") ||
-					last_tok.is_punctuator("{") ||
-					last_tok.is_ws() ||
-					state.last_was_newline);
-	  }
-	  cond_incl_trans_in_mi.clear();
-	  cur_pos.tok = next_stop;
-
-	} else {
-	  // Copy preprocessed tokens.
+	while (batch_range_raw.begin != batch_range_raw.end) {
 	  if (at_beginning) {
 	    if (write_newlines) {
-	      _write_newlines(writer, state,
-			      std::numeric_limits<raw_pp_token_index>::max(),
-			      false, pp_result, source_reader_cache);
+	      _write_newlines(writer, state, batch_range_raw.begin, false,
+			      pp_result, source_reader_cache);
 	    }
 	    at_beginning = false;
 	    write_newlines = true;
 	  }
 
-	  assert(cond_incl_trans_in_mi.empty() ||
-		 cur_pos.tok == op.r.begin);
-	  for (auto it_cond_incl_trans_in_mi = cond_incl_trans_in_mi.begin();
-	       it_cond_incl_trans_in_mi != cond_incl_trans_in_mi.end();
-	       ++it_cond_incl_trans_in_mi) {
+	  raw_pp_token_index copy_end = batch_range_raw.end;
+	  if (it_cond_incl_trans_in_mi != cond_incl_trans_in_mi.end()) {
 	    const _op &trans_op = _ops[*it_cond_incl_trans_in_mi];
-	    depreprocessor::
-	      _write_cond_incl_transition(writer, state,
-					  *trans_op.cond_incl_node,
-					  trans_op.cond_incl_trans_kind,
-					  write_newlines,
-					  pp_result,
-					  source_reader_cache,
-					  remarks);
-	    skip_following_insert_ws = true;
-	  }
-	  cond_incl_trans_in_mi.clear();
-
-	  if (cur_pos.tok != it_range_to_emit_expanded->end) {
-	    const pp_tokens &toks = pp_result.get_pp_tokens();
-
-	    const raw_pp_tokens_range tok_range_raw =
-	      pp_result.pp_tokens_range_to_raw(pp_tokens_range{
-							cur_pos.tok,
-							cur_pos.tok + 1
-					       });
-	    advance_source_to(tok_range_raw.begin);
-	    _set_input_file(writer, state, &*it_source);
-
-	    emit_normalized_tokens(toks, cur_pos.tok,
-				   it_range_to_emit_expanded->end,
-				   [&](const std::string &s) {
-				     writer.append(s);
-				   });
-
-	    const pp_token_index last_index =
-	      it_range_to_emit_expanded->end - 1;
-	    const pp_token &last_tok = toks[last_index];
-
-	    state.last_was_newline = last_tok.is_newline();
-	    skip_following_insert_ws = (last_tok.is_punctuator("(") ||
-					last_tok.is_punctuator("[") ||
-					last_tok.is_punctuator("{") ||
-					last_tok.is_ws() ||
-					state.last_was_newline);
-	    cur_pos.tok = it_range_to_emit_expanded->end;
+	    const raw_pp_tokens_range &r =
+	      (depreprocessor::_get_cond_incl_trans_range_raw
+	       (*trans_op.cond_incl_node, trans_op.cond_incl_trans_kind));
+	    if (batch_range_raw.begin == r.begin) {
+	      depreprocessor::
+		_write_cond_incl_transition(writer, state,
+					    *trans_op.cond_incl_node,
+					    trans_op.cond_incl_trans_kind,
+					    write_newlines,
+					    pp_result,
+					    source_reader_cache,
+					    remarks);
+	      batch_range_raw.begin = r.end;
+	      ++it_cond_incl_trans_in_mi;
+	      continue;
+	    } else {
+	      assert(r.end <= copy_end);
+	      copy_end = r.end;
+	    }
 	  }
 
-	  state.last_input_pos_raw =
-	    std::numeric_limits<raw_pp_token_index>::max();
-	  ++it_range_to_emit_expanded;
+	  while (it_directive != directives.second &&
+		 it_directive->get_source_range() < batch_range_raw) {
+	    ++it_directive;
+	  }
+	  if (it_directive != directives.second) {
+	    const raw_pp_tokens_range &directive_range
+	      = it_directive->get_source_range();
+	    if (directive_range.begin == batch_range_raw.begin) {
+	      batch_range_raw.begin = directive_range.end;
+	      continue;
+	    } else {
+	      copy_end = std::min(directive_range.begin, copy_end);
+	    }
+	  }
+
+	  advance_source_to(batch_range_raw.begin);
+	  _set_input_file(writer, state, &*it_source);
+	  copy_end = std::min(cur_source_range.end, copy_end);
+	  assert(copy_end != batch_range_raw.begin);
+	  const raw_pp_tokens &raw_toks = pp_result.get_raw_tokens();
+	  writer.append
+	    (source_reader_cache.get(*it_source),
+	     range_in_file{
+		    raw_toks[batch_range_raw.begin].get_range_in_file().begin,
+		    raw_toks[copy_end - 1].get_range_in_file().end
+	     });
+	  batch_range_raw.begin = copy_end;
+
+	  const raw_pp_token& last_tok = raw_toks[copy_end - 1];
+	  state.last_input_pos_raw = copy_end;
+	  state.last_was_newline = last_tok.is_newline();
+	  skip_following_insert_ws = (last_tok.is_punctuator("(") ||
+				      last_tok.is_punctuator("[") ||
+				      last_tok.is_punctuator("{") ||
+				      last_tok.is_ws() ||
+				      state.last_was_newline);
 	}
+	cond_incl_trans_in_mi.clear();
+	cur_pos.tok = next_stop;
       }
       break;
 
@@ -1987,29 +1888,16 @@ _write(source_writer &writer, _output_state &state,
 	    // ops get trimmed, but whatever.
 	    skip_insert_ws = true;
 	  } else if (_ops[next_pos.op].a == _op::action::copy) {
-	    const pp_token &next_tok = pp_result.get_pp_tokens()[next_pos.tok];
-	    // See if the first token will get emitted expanded or
-	    // not.
-	    if (it_range_to_emit_expanded == _ranges_to_emit_expanded.cend() ||
-		next_pos.tok < it_range_to_emit_expanded->begin) {
-	      const raw_pp_tokens_range next_tok_index_raw =
-		pp_result.pp_token_index_to_raw(next_pos.tok);
-	      const raw_pp_token &raw_next_tok =
-		pp_result.get_raw_tokens()[next_tok_index_raw.begin];
-	      skip_insert_ws = (raw_next_tok.is_punctuator(")") ||
-				raw_next_tok.is_punctuator("]") ||
-				raw_next_tok.is_punctuator("}") ||
-				raw_next_tok.is_punctuator(";") ||
-				raw_next_tok.is_ws() ||
-				raw_next_tok.is_newline());
-	    } else {
-	      skip_insert_ws = (next_tok.is_punctuator(")") ||
-				next_tok.is_punctuator("]") ||
-				next_tok.is_punctuator("}") ||
-				next_tok.is_punctuator(";") ||
-				next_tok.is_ws() ||
-				next_tok.is_newline());
-	    }
+	    const raw_pp_tokens_range next_tok_index_raw =
+	      pp_result.pp_token_index_to_raw(next_pos.tok);
+	    const raw_pp_token &raw_next_tok =
+	      pp_result.get_raw_tokens()[next_tok_index_raw.begin];
+	    skip_insert_ws = (raw_next_tok.is_punctuator(")") ||
+			      raw_next_tok.is_punctuator("]") ||
+			      raw_next_tok.is_punctuator("}") ||
+			      raw_next_tok.is_punctuator(";") ||
+			      raw_next_tok.is_ws() ||
+			      raw_next_tok.is_newline());
 	  }
 	}
 
