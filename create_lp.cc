@@ -10041,7 +10041,11 @@ void klp::ccp::create_lp(const std::string &outfile,
   _lp_deps_resolver{ai, pol, remarks}();
 
   // Write the live patch.
-  depreprocessor d{atu.get_pp_result(), output_remarks};
+  depreprocessor d{
+    atu.get_pp_result(), pol,
+    lp_creation_policy::allocated_ids_type{ai.get_allocated_ids()},
+    remarks, output_remarks
+  };
   _lp_writer{ai, d}();
   d(outfile);
 }

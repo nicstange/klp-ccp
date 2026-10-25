@@ -21,6 +21,7 @@ noinst_HEADERS =				\
 	constexpr_value.hh			\
 	create_lp.hh				\
 	depreprocessor.hh			\
+	macro_rewriting.hh			\
 	execution_charset_encoder.hh		\
 	gnuc_parser_driver.hh			\
 	header_resolver.hh			\
@@ -67,6 +68,7 @@ libcp_a_SOURCES =				\
 	constexpr_value.cc			\
 	create_lp.cc				\
 	depreprocessor.cc			\
+	macro_rewriting.cc			\
 	execution_charset_encoder.cc		\
 	gnuc_parser.yy				\
 	gnuc_parser_driver.cc			\
