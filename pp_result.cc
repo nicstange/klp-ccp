@@ -3773,6 +3773,28 @@ const_all_nodes_iterator(const _forest_nodes &forest,
   : _forest{&forest}, _node_index{forest._nodes.size()}
 {}
 
+expansion_forest::const_all_nodes_iterator::
+const_all_nodes_iterator(const _forest_nodes &forest,
+			 const _forest_nodes::size_type node) noexcept
+  : _forest{&forest}, _node_index{node._n}
+{}
+
+expansion_forest::const_all_nodes_iterator
+expansion_forest::rescan_subtree::all_nodes_begin() const noexcept
+{
+  return const_all_nodes_iterator{_subtree_root.get_forest(),
+				  _subtree_root.get_node()};
+}
+
+expansion_forest::const_all_nodes_iterator
+expansion_forest::rescan_subtree::all_nodes_end() const noexcept
+{
+  return const_all_nodes_iterator{
+    _subtree_root.get_forest(),
+    _subtree_root.get_forest()._rescan_subtree_end(_subtree_root.get_node())
+  };
+}
+
 bool expansion_forest::const_all_nodes_iterator::
 operator==(const const_all_nodes_iterator &rhs)
   const noexcept

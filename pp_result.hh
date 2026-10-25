@@ -699,6 +699,11 @@ namespace klp
 	    last_rescan_subtree_dfs_pre_node(const size_type root_node)
 	      const noexcept;
 
+	    // Position right after the last node of the subtree
+	    // located at subtree_root, nested argument trees included.
+	    const size_type _rescan_subtree_end(const size_type subtree_root)
+	      const noexcept;
+
 	  private:
 	    const size_type
 	    _next_rescan_subtree_dfs_pre_node(const size_type subtree_root,
@@ -718,8 +723,6 @@ namespace klp
 					       const size_type subtree_end)
 	      const noexcept;
 
-	    const size_type _rescan_subtree_end(const size_type subtree_root)
-	      const noexcept;
 	  }; // class _forest_nodes
 
 	  class _rescan_macro_invocation_ptr;
@@ -780,6 +783,8 @@ namespace klp
 	  class rescan_subtree;
 
 	  class rescan_output_segment;
+
+	  class const_all_nodes_iterator;
 
 	  using nodes_size_type = _forest_nodes::size_type;
 
@@ -1940,6 +1945,12 @@ namespace klp
 	    const_final_out_iterator final_out_begin() const;
 	    const_final_out_iterator final_out_end() const;
 
+	    // All nodes of the subtree, nested argument trees
+	    // included, in serialization order: DFS pre order with
+	    // argument trees right after their owner.
+	    const_all_nodes_iterator all_nodes_begin() const noexcept;
+	    const_all_nodes_iterator all_nodes_end() const noexcept;
+
 	    std::size_t total_src_length() const;
 	    std::size_t total_out_length() const;
 
@@ -1978,12 +1989,17 @@ namespace klp
 
 	  private:
 	    friend class expansion_forest;
+	    friend class rescan_subtree;
 
 	    struct begin_tag{};
 	    struct end_tag{};
 
 	    const_all_nodes_iterator(const _forest_nodes &forest,
 				     const begin_tag&) noexcept;
+
+	    const_all_nodes_iterator(const _forest_nodes &forest,
+				     const _forest_nodes::size_type node)
+	      noexcept;
 
 	    const_all_nodes_iterator(const _forest_nodes &forest,
 				     const end_tag&) noexcept;
