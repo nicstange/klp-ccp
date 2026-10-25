@@ -2117,34 +2117,6 @@ namespace klp
 	const expansion_forest& get_expansion_forest() const noexcept
 	{ return _expansion_forest; }
 
-	class passed_through_arg_token
-	{
-	public:
-	  typedef std::vector<pp_token_index> emerged_tokens_type;
-
-	  bool operator<(const raw_pp_token_index rhs) const noexcept;
-
-	  const raw_pp_token_index get_arg_tok_raw() const noexcept
-	  { return _arg_tok_raw; }
-
-	  const emerged_tokens_type& get_emerged_tokens() const noexcept
-	  { return _emerged_tokens; }
-
-	private:
-	  friend class macro_invocation;
-
-	  passed_through_arg_token(const raw_pp_token_index arg_tok_raw)
-	    noexcept;
-
-	  void _add_emerged_tok(const pp_token_index tok);
-
-	  raw_pp_token_index _arg_tok_raw;
-	  emerged_tokens_type _emerged_tokens;
-	};
-
-	typedef std::vector<passed_through_arg_token>
-		passed_through_arg_tokens_type;
-
 	const raw_pp_tokens_range get_source_range() const noexcept;
 
 	const pp_tokens_range get_output_range(const pp_result &pp_result)
@@ -2160,10 +2132,6 @@ namespace klp
 	  const noexcept
 	{ return _macro_nondef_constraints; }
 
-	const passed_through_arg_token*
-	lookup_passed_through_arg_token(const pp_token_index tok)
-	  const noexcept;
-
       private:
 	friend class pp_result;
 	friend class preprocessor;
@@ -2172,15 +2140,8 @@ namespace klp
 	  (const macro &m,
 	   expansion_forest::invocation_source &&initial_invocation_source);
 
-	void _add_passed_through_macro_arg_token
-			(const raw_pp_token_index arg_tok_raw,
-			 const pp_token_index emerged_token);
-	void _add_non_passthrough_macro_arg_token
-			(const raw_pp_token_index arg_tok_raw);
-
 	used_macros _used_macros;
 	macro_nondef_constraints _macro_nondef_constraints;
-	passed_through_arg_tokens_type _passed_through_arg_tokens;
       };
 
     private:

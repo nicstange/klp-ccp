@@ -184,12 +184,6 @@ namespace klp
       pp_token _concat(pp_token &&tok1, pp_token &&tok2,
 		       const raw_pp_tokens_range &invocation);
 
-      void _find_passed_through_arg_tokens(const pp_result &pp_result,
-					   pp_result::macro_invocation &mi);
-
-      void _find_non_passed_through_arg_tokens(const pp_result &pp_result,
-					       pp_result::macro_invocation &mi);
-
       void _handle_include(const raw_pp_tokens_range &directive_range);
 
       void _push_cond_incl(const raw_pp_token_index range_begin);
