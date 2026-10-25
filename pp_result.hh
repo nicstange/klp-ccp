@@ -1303,10 +1303,25 @@ namespace klp
 	      { return _result; }
 
 	    private:
+	      using _fragments_container_type = std::vector<fragment>;
+
+	    public:
+	      using const_fragment_iterator =
+		_fragments_container_type::const_iterator;
+
+	      const_fragment_iterator fragments_begin() const noexcept
+	      { return _fragments.cbegin(); }
+
+	      const_fragment_iterator fragments_end() const noexcept
+	      { return _fragments.cend(); }
+
+	      std::pair<const_fragment_iterator, const_fragment_iterator>
+	      overlapping_fragments(const tokens_range &range) const noexcept
+	      { return _overlapping_fragments(range); }
+
+	    private:
 	      friend class expansion_forest;
 	      friend class preprocessor;
-
-	      using _fragments_container_type = std::vector<fragment>;
 
 	      std::size_t _next_fragment_out_begin() const noexcept;
 
