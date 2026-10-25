@@ -2072,6 +2072,10 @@ namespace klp
 	    const raw_pp_tokens_range get_total_spanned_source_range()
 	      const noexcept;
 
+	    const rescan_macro_invocation::output::tokens_range
+	    get_total_invocation_range() const noexcept
+	    { return _get_total_invocation_range(); }
+
 	  private:
 	    friend class expansion_forest;
 	    friend class preprocessor;
