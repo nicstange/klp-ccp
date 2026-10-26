@@ -6920,6 +6920,12 @@ struct rescan_macro_invocation_rewriter::_impl
     // analyze(). They're removed from the replacement list and not
     // part of expanded_arg_refs.
     std::vector<std::size_t> deleted_arg_refs;
+    // Expanded references whose output is consumed as an argument by
+    // a rescan child which never references the corresponding
+    // parameter, c.f. analyze(). Their content doesn't matter: they
+    // stay as plain parameter references if anything is served
+    // through the parameter and are not part of expanded_arg_refs.
+    std::vector<std::size_t> dont_care_arg_refs;
     // The edits at each expanded reference, relative to the
     // argument's expansion result (parallel to expanded_arg_refs).
     std::vector<arg_ref_edit> ref_edits;
@@ -7631,6 +7637,105 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
     if (ai.expanded_arg_refs.empty())
       continue;
 
+    // "Don't care" references: a reference whose output tokens are
+    // consumed as (part of) an argument by some rescan child which
+    // never references the corresponding parameter, neither plainly
+    // nor as an operand to # or ##, e.g. by a macro expanding to
+    // nothing. Those tokens never make it to the output, so the
+    // reference doesn't carry any edit, which would make it disagree
+    // with the edited references and force a rewrite of the
+    // definition. Whatever the argument's content, the child ignores
+    // it: leave such references out of the analysis and keep them as
+    // plain parameter references, so that edits can get pushed down
+    // into the argument unimpeded. If nothing is served through the
+    // parameter at all, the argument isn't expanded anymore and
+    // these references get placed verbatim like the others. Note
+    // that this is decided from the child's definition only: the
+    // reference's tokens must be consumed directly by a child of
+    // this invocation.
+    {
+      std::vector<std::pair<std::size_t, std::size_t>> unref_arg_ranges;
+      const auto st = static_cast<expansion_forest::rescan_subtree>(_rmi);
+      for (auto it = st.dfs_pre_begin(); it != st.dfs_pre_end(); ++it) {
+	const rescan_macro_invocation c = *it;
+	if (c.is_arg_tree_root() ||
+	    (static_cast<original_node>(c) ==
+	     static_cast<original_node>(_rmi)) ||
+	    (static_cast<original_node>(c.get_rescan_parent()) !=
+	     static_cast<original_node>(_rmi))) {
+	  continue;
+	}
+	const pp_result::macro &cm = c.get_macro();
+	if (!cm.is_func_like() || cm.is_builtin_special())
+	  continue;
+	const auto &names = cm.get_arg_names();
+	const auto &crepl = cm.get_repl();
+	const std::size_t c_nargs = std::min(c.get_nargs(), names.size());
+	for (std::size_t j = 0; j < c_nargs; ++j) {
+	  const bool referenced =
+	    std::any_of(crepl.begin(), crepl.end(),
+			[&](const raw_pp_token &t) {
+			  return t.is_id() && t.get_value() == names[j];
+			});
+	  if (referenced)
+	    continue;
+	  const auto &r =
+	    static_cast<rescan_macro_invocation>(c.get_arg_tree(j))
+	    .get_src_range();
+	  unref_arg_ranges.emplace_back(r.begin, r.end);
+	}
+      }
+      if (!unref_arg_ranges.empty()) {
+	std::vector<std::size_t> remaining;
+	std::vector<arg_ref_edit> remaining_edits;
+	for (std::size_t k = 0; k < ai.expanded_arg_refs.size(); ++k) {
+	  const std::size_t fi = ai.expanded_arg_refs[k];
+	  arg_ref_edit &re = ai.ref_edits[k];
+	  const bool untouched =
+	    (std::all_of(re.tok_edits.begin(), re.tok_edits.end(),
+			 [](const token_edit &te) {
+			   return te.k == token_edit::kind::kept;
+			 }) &&
+	     std::all_of(re.gaps.begin(), re.gaps.end(),
+			 [](const std::vector<insertion> &g) {
+			   return g.empty();
+			 }));
+	  // The preprocessor trims placeholder empty tokens from the
+	  // arguments' sources: a reference consisting of placeholders
+	  // only, i.e. an argument expanding to nothing, is consumed
+	  // by an adjacent argument range.
+	  const bool only_placeholders =
+	    std::all_of(out_toks.begin() + _frags[fi].b(),
+			out_toks.begin() + _frags[fi].e(),
+			[](const pp_token &t) { return t.is_empty(); });
+	  const bool consumed =
+	    std::any_of(unref_arg_ranges.begin(), unref_arg_ranges.end(),
+			[&](const std::pair<std::size_t, std::size_t> &r) {
+			  if (only_placeholders) {
+			    return (r.first <= _frags[fi].e() &&
+				    _frags[fi].b() <= r.second);
+			  }
+			  return (r.first <= _frags[fi].b() &&
+				  _frags[fi].e() <= r.second);
+			});
+	  if (untouched && consumed) {
+	    ai.dont_care_arg_refs.push_back(fi);
+	  } else {
+	    remaining.push_back(fi);
+	    remaining_edits.push_back(std::move(re));
+	  }
+	}
+	ai.expanded_arg_refs = std::move(remaining);
+	ai.ref_edits = std::move(remaining_edits);
+      }
+    }
+    if (ai.expanded_arg_refs.empty()) {
+      // Only "don't care" references remain: the argument is
+      // referenced as is.
+      ai.any_ref_kept = true;
+      continue;
+    }
+
     const std::size_t none = arg_info::none;
     const std::size_t R = ai.expanded_arg_refs.size();
     const std::size_t alen = ai.ref_edits.front().tok_edits.size();
@@ -8119,7 +8224,9 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
       for (const std::size_t e : bounds) {
 	if (e < b)
 	  continue;
-	if (b == e && alen != 0)
+	// The empty X is for arguments without any real token only:
+	// nothing to retain, but the references can still be served.
+	if (b == e && first_nonempty != alen)
 	  continue;
 
 	// Partition the references into agreement classes. A
@@ -8208,6 +8315,10 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
     if (best.def_change &&
 	_forest.subtree_invokes_counter(_rmi.get_arg_tree(i))) {
       ai.verbatim_arg_refs = ai.expanded_arg_refs;
+      ai.verbatim_arg_refs.insert(ai.verbatim_arg_refs.end(),
+				  ai.dont_care_arg_refs.begin(),
+				  ai.dont_care_arg_refs.end());
+      ai.dont_care_arg_refs.clear();
       continue;
     }
 
@@ -8250,6 +8361,15 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	ai.common_identity = false;
     }
     ai.any_ref_kept = best.n_served != 0;
+    if (!ai.any_ref_kept) {
+      // The parameter is unreferenced in the rewritten definition
+      // and the argument doesn't get expanded anymore: place the
+      // "don't care" references verbatim like the others.
+      ai.verbatim_arg_refs.insert(ai.verbatim_arg_refs.end(),
+				  ai.dont_care_arg_refs.begin(),
+				  ai.dont_care_arg_refs.end());
+      ai.dont_care_arg_refs.clear();
+    }
 
     // Even if there's nothing to push down into the argument, its
     // expansion tree needs to get processed if it contains any
@@ -8966,17 +9086,24 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	  // the range X of the expansion result retained in the
 	  // argument. The reference's edited material outside of X, if
 	  // any, gets placed next to the parameter reference, together
-	  // with any wrap/paste tokens.
-	  const std::size_t r =
-	    (std::find(ai.expanded_arg_refs.begin(), ai.expanded_arg_refs.end(),
-		       fi) -
-	     ai.expanded_arg_refs.begin());
-	  assert(r < ai.ref_edits.size());
-	  const arg_ref_edit &re = ai.ref_edits[r];
-	  const std::size_t b = ai.x_begin;
-	  const std::size_t e = ai.x_end;
-	  const std::size_t alen = re.tok_edits.size();
+	  // with any wrap/paste tokens. A "don't care" reference,
+	  // c.f. analyze(), stays as is, whatever X: the consuming
+	  // rescan child ignores its content.
+	  const bool dont_care =
+	    (std::find(ai.dont_care_arg_refs.begin(),
+		       ai.dont_care_arg_refs.end(), fi) !=
+	     ai.dont_care_arg_refs.end());
+	  const std::size_t alen = finfo.e() - finfo.b();
+	  const std::size_t b = dont_care ? 0 : ai.x_begin;
+	  const std::size_t e = dont_care ? alen : ai.x_end;
 	  if (it_mat != ai.served_material.end()) {
+	    assert(!dont_care);
+	    const std::size_t r =
+	      (std::find(ai.expanded_arg_refs.begin(),
+			 ai.expanded_arg_refs.end(), fi) -
+	       ai.expanded_arg_refs.begin());
+	    assert(r < ai.ref_edits.size());
+	    const arg_ref_edit &re = ai.ref_edits[r];
 	    const auto &mat = it_mat->second;
 	    std::vector<rewritten_macro_token> pre_toks;
 	    std::vector<rewritten_macro_token> post_toks;
