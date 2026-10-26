@@ -4068,15 +4068,23 @@ void depreprocessor::_set_input_file(source_writer &writer,
 				     _output_state &state,
 				     const pp_result::header_inclusion_node *h)
 {
-  if (state.last_input_file != h) {
+  // A file can be included several times and the output might
+  // alternate between its inclusions, e.g. the trailing #undefs of
+  // one with the leading #defines of the next. The annotation is
+  // about the file, don't repeat it in that case.
+  const bool same_file =
+    (state.last_input_file == h ||
+     (state.last_input_file && h &&
+      state.last_input_file->get_filename() == h->get_filename()));
+  if (!same_file) {
     assert(state.last_was_newline);
     if (h)
       writer.append("/* klp-ccp: from " + h->get_filename() + " */");
     else
       writer.append("/* klp-ccp: not from file */");
     writer.append(source_writer::newline_tag{});
-    state.last_input_file = h;
   }
+  state.last_input_file = h;
 }
 
 void depreprocessor::_write_newlines(source_writer &writer,
