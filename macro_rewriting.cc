@@ -6842,19 +6842,6 @@ struct rescan_macro_invocation_rewriter::_impl
   // macro argument, relative to the argument's expansion.
   struct arg_ref_edit
   {
-    bool is_identity() const noexcept
-    {
-      for (const auto &te : tok_edits) {
-	if (te.k != token_edit::kind::kept)
-	  return false;
-      }
-      for (const auto &g : gaps) {
-	if (!g.empty())
-	  return false;
-      }
-      return true;
-    }
-
     std::vector<token_edit> tok_edits;
     std::vector<std::vector<insertion>> gaps;
   };
@@ -6929,6 +6916,10 @@ struct rescan_macro_invocation_rewriter::_impl
 
     std::vector<std::size_t> expanded_arg_refs;
     std::vector<std::size_t> operator_arg_refs;
+    // Expanded references whose output got deleted completely, c.f.
+    // analyze(). They're removed from the replacement list and not
+    // part of expanded_arg_refs.
+    std::vector<std::size_t> deleted_arg_refs;
     // The edits at each expanded reference, relative to the
     // argument's expansion result (parallel to expanded_arg_refs).
     std::vector<arg_ref_edit> ref_edits;
@@ -7235,12 +7226,6 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
     }
   }
   flush_pending(L, true);
-
-  // Empty tokens are mere placeholders, deleting them is meaningless.
-  for (std::size_t p = 0; p < L; ++p) {
-    if (out_toks[p].is_empty() && _tok_edits[p].k == token_edit::kind::deleted)
-      _tok_edits[p].k = token_edit::kind::kept;
-  }
 
   // The invocation is to be dropped from the source if all of its
   // non-empty output tokens got deleted. An invocation expanding to
@@ -7598,10 +7583,56 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
     if (ai.expanded_arg_refs.empty())
       continue;
 
+    // A reference whose output got deleted completely, with no
+    // insertions attributed to it, is removed from the replacement
+    // list: the parameter reference is what made the deleted tokens
+    // appear in the first place. This keeps the argument out of the
+    // analysis for that reference, rather than having it emptied,
+    // which would rewrite its whole expansion tree into definitions
+    // expanding to nothing. If no expanded reference remains, the
+    // argument isn't expanded at all anymore and stays as is in the
+    // invocation's source. The only observable difference is the
+    // dropped pre-expansion, which matters for __COUNTER__ only,
+    // where dropping is permitted. Placeholder empty tokens don't
+    // count if there's any real token: the edit script's copy ranges
+    // tend to extend over trailing ones. An output consisting of
+    // placeholders only is deleted iff none of them is covered.
+    {
+      std::vector<std::size_t> remaining;
+      for (const auto fi : ai.expanded_arg_refs) {
+	arg_ref_edit re = extract_arg_ref_edit(_frags[fi]);
+	bool any_nonempty = false;
+	bool all_nonempty_deleted = true;
+	bool all_deleted = true;
+	for (std::size_t p = 0; p < re.tok_edits.size(); ++p) {
+	  const bool del = re.tok_edits[p].k == token_edit::kind::deleted;
+	  if (!out_toks[_frags[fi].b() + p].is_empty()) {
+	    any_nonempty = true;
+	    all_nonempty_deleted &= del;
+	  }
+	  all_deleted &= del;
+	}
+	const bool deleted =
+	  (!re.tok_edits.empty() &&
+	   (any_nonempty ? all_nonempty_deleted : all_deleted) &&
+	   std::all_of(re.gaps.begin(), re.gaps.end(),
+		       [](const std::vector<insertion> &g) {
+			 return g.empty();
+		       }));
+	if (deleted) {
+	  ai.deleted_arg_refs.push_back(fi);
+	} else {
+	  remaining.push_back(fi);
+	  ai.ref_edits.push_back(std::move(re));
+	}
+      }
+      ai.expanded_arg_refs = std::move(remaining);
+    }
+    if (ai.expanded_arg_refs.empty())
+      continue;
+
     const std::size_t none = arg_info::none;
     const std::size_t R = ai.expanded_arg_refs.size();
-    for (const auto fi : ai.expanded_arg_refs)
-      ai.ref_edits.push_back(extract_arg_ref_edit(_frags[fi]));
     const std::size_t alen = ai.ref_edits.front().tok_edits.size();
     for (const auto &re : ai.ref_edits)
       assert(re.tok_edits.size() == alen);
@@ -7827,12 +7858,21 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	}
 	return std::make_pair(std::move(cls), std::move(ncls));
       };
-    const auto tok_cls =
+    auto tok_cls =
       classify(alen,
 	       [&](const std::size_t r, const std::size_t p)
 	       -> const token_edit& {
 		 return ai.ref_edits[r].tok_edits[p];
 	       });
+    // Placeholder empty tokens are transparent: whether the edit
+    // script reached one of them or not doesn't make the references
+    // disagree.
+    for (std::size_t p = 0; p < alen; ++p) {
+      if (arg_out_tok(p).is_empty()) {
+	std::fill(tok_cls.first[p].begin(), tok_cls.first[p].end(), 0);
+	tok_cls.second[p] = 1;
+      }
+    }
     const auto gap_cls =
       classify(alen + 1,
 	       [&](const std::size_t r, const std::size_t g)
@@ -7862,7 +7902,8 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 
     // Prefix sums per reference: material per cost index and in
     // total over the token positions [0, p), non-empty gaps among
-    // [0, g) and non-"kept" edits within [0, p).
+    // [0, g) and non-"kept" edits at non-placeholder positions within
+    // [0, p).
     const std::size_t ncost = 2 * nlevels;
     std::vector<std::vector<unsigned>> mat_prefix
       (R, std::vector<unsigned>(ncost * (alen + 1), 0));
@@ -7884,7 +7925,8 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	anymat_prefix[r][p + 1] = anymat_prefix[r][p] + mat;
 	nonkept_prefix[r][p + 1] =
 	  (nonkept_prefix[r][p] +
-	   (edit_kind(r, p) != token_edit::kind::kept));
+	   (edit_kind(r, p) != token_edit::kind::kept &&
+	    !arg_out_tok(p).is_empty()));
       }
       for (std::size_t g = 0; g <= alen; ++g) {
 	gap_prefix[r][g + 1] =
@@ -7935,7 +7977,8 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	add_bound(p);
 	add_bound(p + 1);
       } else {
-	nonid[p] = edit_kind(0, p) != token_edit::kind::kept;
+	nonid[p] = (edit_kind(0, p) != token_edit::kind::kept &&
+		    !arg_out_tok(p).is_empty());
       }
     }
     for (std::size_t g = 0; g <= alen; ++g) {
@@ -8170,16 +8213,15 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 
     // The edits to push down into the argument: the served
     // references' common edits within X and deletions outside of
-    // it. Gaps outside of X belong to the outside portions. Deleting
-    // placeholder empty tokens is meaningless, keep them: an
-    // invocation whose non-empty output gets deleted completely is
-    // dropped from the source by its rewriter anyway.
+    // it. Gaps outside of X belong to the outside portions. Note
+    // that this deletes the placeholder empty tokens outside of X as
+    // well, so that invocations expanding to nothing there are not
+    // retained in the rewritten argument. Inside X, the placeholders
+    // keep whatever the edits say, which, as the edit script's ops
+    // get binned by the tokens they cover, means that an invocation
+    // expanding to nothing survives iff it's part of a covered range.
     ai.common.tok_edits.assign(alen, token_edit{});
     ai.common.gaps.assign(alen + 1, std::vector<insertion>{});
-    for (std::size_t p = 0; p < alen; ++p) {
-      if (arg_out_tok(p).is_empty())
-	ai.common.tok_edits[p].k = token_edit::kind::kept;
-    }
     if (best.n_served) {
       for (std::size_t p = b; p < e; ++p)
 	ai.common.tok_edits[p] = best.rep.tok_edits[p - b];
@@ -8194,7 +8236,19 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
       for (auto &te : ai.common.tok_edits)
 	te.k = token_edit::kind::kept;
     }
-    ai.common_identity = ai.common.is_identity();
+    // Identity modulo placeholders: those don't warrant a rewrite of
+    // the argument on their own.
+    ai.common_identity = true;
+    for (std::size_t p = 0; p < alen && ai.common_identity; ++p) {
+      if (!arg_out_tok(p).is_empty() &&
+	  ai.common.tok_edits[p].k != token_edit::kind::kept) {
+	ai.common_identity = false;
+      }
+    }
+    for (std::size_t g = 0; g <= alen && ai.common_identity; ++g) {
+      if (!ai.common.gaps[g].empty())
+	ai.common_identity = false;
+    }
     ai.any_ref_kept = best.n_served != 0;
 
     // Even if there's nothing to push down into the argument, its
@@ -8220,11 +8274,8 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	  const std::size_t g_begin, const std::size_t g_end) {
 	arg_ref_edit part = ai.ref_edits[r];
 	for (std::size_t p = 0; p < alen; ++p) {
-	  if (p < p_begin || p >= p_end) {
+	  if (p < p_begin || p >= p_end)
 	    part.tok_edits[p] = token_edit{};
-	    if (arg_out_tok(p).is_empty())
-	      part.tok_edits[p].k = token_edit::kind::kept;
-	  }
 	}
 	for (std::size_t g = 0; g <= alen; ++g) {
 	  if (g < g_begin || g > g_end)
@@ -8693,7 +8744,13 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 		       (_arg_rewrites[ai._arg_rewrites_index].result
 			.top_level_rewritten_rescan_macro_invocations),
 		       nullptr);
-      } else if (ai.any_ref_kept || ai.expanded_arg_refs.empty()) {
+      } else if (ai.any_ref_kept ||
+		 (ai.expanded_arg_refs.empty() &&
+		  ai.deleted_arg_refs.empty())) {
+	// The argument is referenced as is, or has never been
+	// expanded in the first place. Otherwise, i.e. if all its
+	// expanded references got removed, it isn't expanded anymore
+	// and its expansion tree is not in effect.
 	_forest.clone_original_subtree(orig_arg_root,
 				      static_cast<rrmi_index>(arg_root));
       }
@@ -8854,6 +8911,14 @@ rescan_macro_invocation_rewriter::_impl::finalize()
       {
 	const std::size_t i = f.get_arg_ref_fragment().get_arg_index();
 	const auto &ai = _args[i];
+	if (std::find(ai.deleted_arg_refs.begin(), ai.deleted_arg_refs.end(),
+		      fi) != ai.deleted_arg_refs.end()) {
+	  // The reference's output got deleted completely, remove the
+	  // reference itself, c.f. analyze().
+	  rewritten_m_builder.erase(raw_pp_tokens_range{repl.begin(),
+							repl.begin() + 1});
+	  break;
+	}
 	const auto it_lower = ai.lower_rewrites.find(fi);
 	const auto it_mat = ai.served_material.find(fi);
 
@@ -9039,8 +9104,12 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	  push_insertion_edit(repl.begin(), ins);
 	bool changed = verbatim_frags.count(fi) != 0;
 	for (std::size_t p = finfo.b(); p < finfo.e() && !changed; ++p) {
-	  if (_tok_edits[p].k != token_edit::kind::kept)
+	  // A placeholder empty result, e.g. from a conditional
+	  // comma's removal, is no token to be edited.
+	  if (_tok_edits[p].k != token_edit::kind::kept &&
+	      !out_toks[p].is_empty()) {
 	    changed = true;
+	  }
 	  if (p != finfo.b() && !_gap_insertions[p].empty())
 	    changed = true;
 	}
