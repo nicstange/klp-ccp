@@ -227,6 +227,10 @@ EXTRA_DIST = ccp.exp				\
 	macros-63.c.expected			\
 	macros-64.c				\
 	macros-64.c.expected			\
+	macros-65.c				\
+	macros-65.c.expected			\
+	macros-66.c				\
+	macros-66.c.expected			\
 	make-extern-1.c			\
 	make-extern-1.c.expected		\
 	make-extern-2.c			\

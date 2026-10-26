@@ -6308,6 +6308,44 @@ namespace
     return tok;
   }
 
+  // Emit the material preceding a wrapped identifier, c.f.
+  // rescan_macro_invocation_rewriter::_impl::wrap_edit: the pre
+  // tokens and, for a non-empty prefix, 'prefix ##'. The prefix is
+  // the head of an identifier and thus, an identifier itself.
+  void append_wrap_pre(const std::vector<pp_token> &pre,
+		       const std::string &prefix,
+		       std::vector<rewritten_macro_token> &dst)
+  {
+    for (const auto &t : pre)
+      dst.emplace_back(normalize_src_token(t));
+    if (!prefix.empty()) {
+      dst.emplace_back(pp_token{pp_token::type::id, prefix});
+      dst.emplace_back(pp_token{pp_token::type::punctuator, "##"},
+		       rewritten_macro_token::pp_operator_tag{});
+    }
+  }
+
+  // Emit the material following a wrapped identifier: for a non-empty
+  // suffix '## suffix', then the post tokens. The suffix is the tail
+  // of an identifier, which may well start with a digit.
+  void append_wrap_post(const std::string &suffix,
+			const std::vector<pp_token> &post,
+			std::vector<rewritten_macro_token> &dst)
+  {
+    if (!suffix.empty()) {
+      dst.emplace_back(pp_token{pp_token::type::punctuator, "##"},
+		       rewritten_macro_token::pp_operator_tag{});
+      const bool is_num =
+	std::isdigit(static_cast<unsigned char>(suffix.front()));
+      dst.emplace_back(pp_token{(is_num ?
+				 pp_token::type::pp_number :
+				 pp_token::type::id),
+				suffix});
+    }
+    for (const auto &t : post)
+      dst.emplace_back(normalize_src_token(t));
+  }
+
   rewritten_macro_definition_id
   rewritten_m_of_rrmi(rewritten_expansion_forest &forest,
 		      const rrmi_index rrmi)
@@ -6821,6 +6859,28 @@ struct rescan_macro_invocation_rewriter::_impl
     std::vector<std::vector<insertion>> gaps;
   };
 
+  // An edit replacing an identifier token by a sequence of the form
+  // 'pre w post', where w = prefix + id + suffix is the only
+  // identifier therein, id being the original token's value. Such an
+  // edit can be implemented without placing the identifier itself
+  // into the replacement list: the pre and post tokens get wrapped
+  // around the identifier's source and a non-empty prefix resp.
+  // suffix gets pasted onto it by means of a '##' operator. This
+  // applies to parameter references, c.f. the argument analysis in
+  // analyze(), as well as to the results of '##' concatenations,
+  // c.f. finalize().
+  struct wrap_edit
+  {
+    bool valid = false;
+    std::vector<pp_token> pre;
+    std::string prefix;
+    std::string suffix;
+    std::vector<pp_token> post;
+    std::vector<std::pair<std::size_t, trace_index>> traces;
+  };
+  static wrap_edit detect_wrap_edit(const pp_token &orig,
+				    const token_edit &te);
+
   // Per macro parameter: the fragments referencing it and how each
   // expanded reference is to be served. See the argument analysis in
   // analyze() for the model: a contiguous range X of the argument's
@@ -6836,7 +6896,7 @@ struct rescan_macro_invocation_rewriter::_impl
     // Additional material needed in the replacement list around the
     // parameter reference for a reference served through the
     // parameter: its edited expansion result outside of X and/or a
-    // wrap or paste around X's boundary tokens (c.f. wrap_info in
+    // wrap or paste around X's boundary tokens (c.f. wrap_edit in
     // analyze()).
     struct served_ref_material
     {
@@ -6996,6 +7056,38 @@ _impl(rewritten_expansion_forest &forest,
     _children{std::move(children)},
     _counters{std::move(counters)}
 {}
+
+rescan_macro_invocation_rewriter::_impl::wrap_edit
+rescan_macro_invocation_rewriter::_impl::
+detect_wrap_edit(const pp_token &orig, const token_edit &te)
+{
+  wrap_edit w;
+  if (te.k != token_edit::kind::replaced || !orig.is_id())
+    return w;
+  const std::size_t none = std::numeric_limits<std::size_t>::max();
+  std::size_t id_pos = none;
+  for (std::size_t k = 0; k < te.replacement.size(); ++k) {
+    if (te.replacement[k].is_id()) {
+      if (id_pos != none)
+	return w;
+      id_pos = k;
+    }
+  }
+  if (id_pos == none)
+    return w;
+  const std::string &wv = te.replacement[id_pos].get_value();
+  const std::string &id = orig.get_value();
+  const auto found = wv.find(id);
+  if (found == std::string::npos)
+    return w;
+  w.prefix = wv.substr(0, found);
+  w.suffix = wv.substr(found + id.size());
+  w.pre.assign(te.replacement.begin(), te.replacement.begin() + id_pos);
+  w.post.assign(te.replacement.begin() + id_pos + 1, te.replacement.end());
+  w.traces = te.traces;
+  w.valid = true;
+  return w;
+}
 
 void rescan_macro_invocation_rewriter::_impl::analyze()
 {
@@ -7611,57 +7703,22 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
       };
 
     // A reference's edit at one of X's boundary tokens which can be
-    // implemented by wrapping the parameter reference: the identifier
-    // token gets replaced by a sequence of the form 'pre w post',
-    // where w = prefix + id + suffix is the only identifier therein. A
-    // non-empty prefix or suffix requires a '##' paste.
-    struct wrap_info
-    {
-      bool valid = false;
-      std::vector<pp_token> pre;
-      std::string prefix;
-      std::string suffix;
-      std::vector<pp_token> post;
-      std::vector<std::pair<std::size_t, trace_index>> traces;
-    };
+    // implemented by wrapping the parameter reference, c.f. wrap_edit.
     const auto detect_wrap =
       [&](const std::size_t r, const std::size_t p,
 	  const bool allow_pre_side, const bool allow_post_side) {
-	wrap_info w;
-	const auto &te = ai.ref_edits[r].tok_edits[p];
-	const pp_token &orig = arg_out_tok(p);
-	if (te.k != token_edit::kind::replaced || !orig.is_id())
+	wrap_edit w = detect_wrap_edit(arg_out_tok(p),
+				       ai.ref_edits[r].tok_edits[p]);
+	if (!w.valid)
 	  return w;
-	std::size_t id_pos = none;
-	for (std::size_t k = 0; k < te.replacement.size(); ++k) {
-	  if (te.replacement[k].is_id()) {
-	    if (id_pos != none)
-	      return w;
-	    id_pos = k;
-	  }
-	}
-	if (id_pos == none)
-	  return w;
-	const std::string &wv = te.replacement[id_pos].get_value();
-	const std::string &id = orig.get_value();
-	const auto found = wv.find(id);
-	if (found == std::string::npos)
-	  return w;
-	w.prefix = wv.substr(0, found);
-	w.suffix = wv.substr(found + id.size());
 	// Pasting works on the unexpanded argument, which must thus
 	// equal the expanded one.
 	if ((!w.prefix.empty() || !w.suffix.empty()) && !macro_free)
-	  return w;
-	w.pre.assign(te.replacement.begin(), te.replacement.begin() + id_pos);
-	w.post.assign(te.replacement.begin() + id_pos + 1,
-		      te.replacement.end());
-	if (!allow_pre_side && (!w.pre.empty() || !w.prefix.empty()))
-	  return w;
-	if (!allow_post_side && (!w.post.empty() || !w.suffix.empty()))
-	  return w;
-	w.traces = te.traces;
-	w.valid = true;
+	  w.valid = false;
+	else if (!allow_pre_side && (!w.pre.empty() || !w.prefix.empty()))
+	  w.valid = false;
+	else if (!allow_post_side && (!w.post.empty() || !w.suffix.empty()))
+	  w.valid = false;
 	return w;
       };
 
@@ -8036,12 +8093,12 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	    // the last one.
 	    const bool first_ok = (!at_head(b) || re.gaps[0].empty());
 	    const bool last_ok = (!at_tail(e) || re.gaps[alen].empty());
-	    const wrap_info wf =
+	    const wrap_edit wf =
 	      (first_ok ?
-	       detect_wrap(r, b, true, e == b + 1) : wrap_info{});
-	    const wrap_info wl =
+	       detect_wrap(r, b, true, e == b + 1) : wrap_edit{});
+	    const wrap_edit wl =
 	      (last_ok && e > b + 1 ?
-	       detect_wrap(r, e - 1, false, true) : wrap_info{});
+	       detect_wrap(r, e - 1, false, true) : wrap_edit{});
 	    if (wf.valid)
 	      variants.push_back(class_member{r, true, e == b + 1});
 	    if (wl.valid)
@@ -8221,7 +8278,7 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	  mat.right_verbatim = true;
       }
       if (m.wrap_first) {
-	const wrap_info w = detect_wrap(r, b, true, e == b + 1);
+	const wrap_edit w = detect_wrap(r, b, true, e == b + 1);
 	assert(w.valid);
 	mat.wrap_first = true;
 	mat.wrap_pre = w.pre;
@@ -8236,7 +8293,7 @@ void rescan_macro_invocation_rewriter::_impl::analyze()
 	  mat.wrap_traces.push_back(tr.second);
       }
       if (m.wrap_last && e > b + 1) {
-	const wrap_info w = detect_wrap(r, e - 1, false, true);
+	const wrap_edit w = detect_wrap(r, e - 1, false, true);
 	assert(w.valid);
 	mat.wrap_last = true;
 	mat.paste_suffix = w.suffix;
@@ -8865,30 +8922,8 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 								0, b),
 					     static_cast<rrmi_index>(_rrmi));
 	    }
-	    for (const auto &t : mat.wrap_pre)
-	      pre_toks.emplace_back(normalize_src_token(t));
-	    if (!mat.paste_prefix.empty()) {
-	      // 'prefix ## x': the prefix is the head of an identifier
-	      // and thus, an identifier itself.
-	      pre_toks.emplace_back(pp_token{pp_token::type::id,
-					     mat.paste_prefix});
-	      pre_toks.emplace_back(pp_token{pp_token::type::punctuator, "##"},
-				    rewritten_macro_token::pp_operator_tag{});
-	    }
-	    if (!mat.paste_suffix.empty()) {
-	      // 'x ## suffix': the suffix is the tail of an identifier,
-	      // which may well start with a digit.
-	      post_toks.emplace_back(pp_token{pp_token::type::punctuator, "##"},
-				     rewritten_macro_token::pp_operator_tag{});
-	      const bool is_num = std::isdigit(static_cast<unsigned char>
-					       (mat.paste_suffix.front()));
-	      post_toks.emplace_back(pp_token{(is_num ?
-					       pp_token::type::pp_number :
-					       pp_token::type::id),
-					      mat.paste_suffix});
-	    }
-	    for (const auto &t : mat.wrap_post)
-	      post_toks.emplace_back(normalize_src_token(t));
+	    append_wrap_pre(mat.wrap_pre, mat.paste_prefix, pre_toks);
+	    append_wrap_post(mat.paste_suffix, mat.wrap_post, post_toks);
 	    if (mat.right_lower != arg_info::none) {
 	      auto toks = lower_portion(_arg_rewrites[mat.right_lower]);
 	      post_toks.insert(post_toks.end(),
@@ -9000,6 +9035,8 @@ rescan_macro_invocation_rewriter::_impl::finalize()
       /* fall through */
     case out_fragment::op::conditional_comma:
       {
+	for (const auto &ins : finfo.head_ins)
+	  push_insertion_edit(repl.begin(), ins);
 	bool changed = verbatim_frags.count(fi) != 0;
 	for (std::size_t p = finfo.b(); p < finfo.e() && !changed; ++p) {
 	  if (_tok_edits[p].k != token_edit::kind::kept)
@@ -9007,21 +9044,55 @@ rescan_macro_invocation_rewriter::_impl::finalize()
 	  if (p != finfo.b() && !_gap_insertions[p].empty())
 	    changed = true;
 	}
-	if (changed) {
+	bool wrapped = false;
+	if (changed && f.get_op() == out_fragment::op::concat &&
+	    finfo.e() == finfo.b() + 1 && !verbatim_frags.count(fi)) {
+	  // A wrap edit on a concatenation's single identifier result
+	  // can be implemented on the operands, keeping the definition
+	  // independent of the particular arguments: the pre tokens
+	  // and 'prefix ##' go in front of the '##' sequence, '##
+	  // suffix' and the post tokens after it. The '##' operator is
+	  // left-associative and the pastes operate on the same
+	  // unexpanded operands as the original ones, so 'prefix ## x
+	  // ## y ## suffix' yields exactly the edited token. For the
+	  // result to be an identifier, its first constituent must be
+	  // one as well, thus the prefix paste is valid.
+	  const wrap_edit w = detect_wrap_edit(out_toks[finfo.b()],
+					       _tok_edits[finfo.b()]);
+	  if (w.valid) {
+	    std::vector<rewritten_macro_token> pre_toks;
+	    std::vector<rewritten_macro_token> post_toks;
+	    append_wrap_pre(w.pre, w.prefix, pre_toks);
+	    append_wrap_post(w.suffix, w.post, post_toks);
+	    for (const auto &tr : w.traces)
+	      finalize_trace(_forest, tr.second, static_cast<rrmi_index>(_rrmi));
+	    check_representable(pre_toks);
+	    check_representable(post_toks);
+	    if (!pre_toks.empty()) {
+	      rewritten_m_builder.insert(repl.begin(), sticky_side::right,
+					 std::move(pre_toks));
+	    }
+	    if (!post_toks.empty()) {
+	      rewritten_m_builder.insert(repl.begin() + repl.length(),
+					 sticky_side::left,
+					 std::move(post_toks));
+	    }
+	    wrapped = true;
+	  }
+	}
+	if (changed && !wrapped) {
 	  auto toks = finalize_mat_tokens(materialize(finfo, false, false),
 					  static_cast<rrmi_index>(_rrmi));
 	  check_representable(toks);
 	  rewritten_m_builder.replace(raw_pp_tokens_range{repl.begin(),
 						  repl.begin() + repl.length()},
 			      std::move(toks));
-	} else {
+	} else if (!changed) {
 	  for (std::size_t p = finfo.b(); p < finfo.e(); ++p) {
 	    for (const auto &tr : _tok_edits[p].traces)
 	      finalize_trace(_forest, tr.second, static_cast<rrmi_index>(_rrmi));
 	  }
 	}
-	for (const auto &ins : finfo.head_ins)
-	  push_insertion_edit(repl.begin(), ins);
 	for (const auto &ins : finfo.tail_ins)
 	  push_insertion_edit(repl.begin() + repl.length(), ins);
       }
