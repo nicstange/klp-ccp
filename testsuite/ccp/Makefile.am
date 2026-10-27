@@ -1,6 +1,7 @@
 EXTRA_DIST = ccp.exp				\
 	ccp-aarch64.exp			\
 	ccp-aarch64-specific.exp		\
+	ccp-x86_64-specific.exp		\
 	aarch64-va-list-1.c		\
 	aarch64-va-list-1.c.expected		\
 	aarch64-types-1.c			\
@@ -288,4 +289,16 @@ EXTRA_DIST = ccp.exp				\
 	tag-defs-9.c				\
 	tag-defs-9.c.expected			\
 	tag-defs-10.c				\
-	tag-defs-10.c.expected
+	tag-defs-10.c.expected		\
+	x86_64-addrspace-make-pointer-1.c	\
+	x86_64-addrspace-make-pointer-1.c.expected	\
+	x86_64-addrspace-make-pointer-2.c	\
+	x86_64-addrspace-make-pointer-2.c.expected	\
+	x86_64-addrspace-make-pointer-3.c	\
+	x86_64-addrspace-make-pointer-3.c.expected	\
+	x86_64-addrspace-make-extern-1.c	\
+	x86_64-addrspace-make-extern-1.c.expected	\
+	x86_64-addrspace-make-extern-2.c	\
+	x86_64-addrspace-make-extern-2.c.expected	\
+	x86_64-addrspace-make-extern-3.c	\
+	x86_64-addrspace-make-extern-3.c.expected
