@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2017-2022, 2024, 2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -245,6 +245,7 @@ namespace klp
       class attribute_specifier;
       class storage_class_specifier;
       class type_qualifier;
+      class address_space;
       class type_qualifier_list;
       class type_specifier;
       class struct_declaration;
@@ -320,6 +321,7 @@ namespace klp
       class attribute_specifier_list;
       class storage_class_specifier;
       class type_qualifier;
+      class address_space;
       class type_qualifier_list;
       class type_specifier;
       class type_specifier_pod;
@@ -2128,13 +2130,6 @@ namespace klp
 	storage_class _sc;
       };
 
-      enum class type_qualifier_type
-      {
-	tqt_const,
-	tqt_restrict,
-	tqt_volatile,
-      };
-
       class type_qualifier final : public ast_entity<type_qualifier>
       {
       public:
@@ -2161,6 +2156,35 @@ namespace klp
 	types::qualifier _q;
       };
 
+      // A target specific named address space qualifier keyword like
+      // __seg_gs on x86. Syntactically these can appear wherever a
+      // type qualifier can.
+      class address_space final : public ast_entity<address_space>
+      {
+      public:
+	typedef type_set<specifier_qualifier_list,
+			 type_qualifier_list> parent_types;
+
+      public:
+	address_space(const pp_tokens_range &tr,
+		      const types::address_space as) noexcept;
+
+	virtual ~address_space() noexcept override;
+
+	types::address_space get_address_space() const noexcept
+	{ return _as; }
+
+      private:
+	virtual _ast_entity* _get_child(const size_t) const noexcept override;
+
+	virtual void _process(processor<void> &p) override;
+	virtual void _process(const_processor<void> &p) const override;
+	virtual bool _process(processor<bool> &p) override;
+	virtual bool _process(const_processor<bool> &p) const override;
+
+	types::address_space _as;
+      };
+
       class type_qualifier_list final : public ast_entity<type_qualifier_list>
       {
       public:
@@ -2170,16 +2194,23 @@ namespace klp
 
 	type_qualifier_list(type_qualifier* &&tq);
 
+	type_qualifier_list(address_space* &&as);
+
 	type_qualifier_list(attribute_specifier_list* &&asl);
 
 	virtual ~type_qualifier_list() noexcept override;
 
 	void extend(type_qualifier* &&tq);
 
+	void extend(address_space* &&as);
+
 	void extend(attribute_specifier_list* &&asl);
 
+	// Combine the list's type qualifiers and address space
+	// qualifiers. Reports an error for conflicting named address
+	// spaces.
 	const types::qualifiers
-	get_qualifiers() const;
+	get_qualifiers(ast &a) const;
 
 	template <typename callable_type>
 	bool for_each_attribute(callable_type &&c);
@@ -2193,6 +2224,7 @@ namespace klp
 	virtual bool _process(const_processor<bool> &p) const override;
 
 	std::vector<std::reference_wrapper<type_qualifier> > _tqs;
+	std::vector<std::reference_wrapper<address_space> > _ass;
 	std::vector<std::reference_wrapper<attribute_specifier_list> > _asls;
       };
 
@@ -3256,6 +3288,8 @@ namespace klp
 
 	specifier_qualifier_list(type_qualifier* &&tq);
 
+	specifier_qualifier_list(address_space* &&as);
+
 	specifier_qualifier_list(attribute_specifier_list* &&asl);
 
 	virtual ~specifier_qualifier_list() noexcept;
@@ -3264,14 +3298,19 @@ namespace klp
 
 	void extend(type_qualifier* &&tq);
 
+	void extend(address_space* &&as);
+
 	void extend(attribute_specifier_list* &&asl);
 
 	void extend(specifier_qualifier_list* &&sql);
 
 	virtual void evaluate_type(ast &a, const target &tgt) override;
 
+	// Combine the list's type qualifiers and address space
+	// qualifiers. Reports an error for conflicting named address
+	// spaces.
 	const types::qualifiers
-	get_qualifiers() const;
+	get_qualifiers(ast &a) const;
 
 	bool is_signed_explicit() const noexcept;
 
@@ -3295,6 +3334,7 @@ namespace klp
       private:
 	std::vector<std::reference_wrapper<type_specifier> > _tss;
 	std::vector<std::reference_wrapper<type_qualifier> > _tqs;
+	std::vector<std::reference_wrapper<address_space> > _ass;
 	std::vector<std::reference_wrapper<attribute_specifier_list> > _asls;
       };
 
@@ -3311,6 +3351,8 @@ namespace klp
 
 	declaration_specifiers(type_qualifier* &&tq);
 
+	declaration_specifiers(address_space* &&as);
+
 	declaration_specifiers(attribute_specifier_list* &&asl);
 
 	virtual ~declaration_specifiers() noexcept override;
@@ -3322,6 +3364,8 @@ namespace klp
 	void extend(type_specifier* &&ts);
 
 	void extend(type_qualifier* &&tq);
+
+	void extend(address_space* &&as);
 
 	void extend(attribute_specifier_list* &&asl);
 

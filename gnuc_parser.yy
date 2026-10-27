@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2017-2019, 2021-2022, 2024, 2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -101,6 +101,9 @@ static void empty(klp::ccp::pp_tokens_range &loc)
   klp::ccp::types::struct_or_union_kind struct_or_union_kind;
   klp::ccp::types::ext_int_type::kind ext_int_kind;
   klp::ccp::types::ext_float_type::kind ext_float_kind;
+  // Named address space qualifier keywords carry the target's
+  // address space id, c.f. target::get_address_space_keywords().
+  unsigned char address_space_id;
 
   klp::ccp::ast::expr *expr;
   klp::ccp::ast::offset_member_designator *offset_member_designator;
@@ -120,6 +123,7 @@ static void empty(klp::ccp::pp_tokens_range &loc)
   klp::ccp::ast::declarator *declarator;
   klp::ccp::ast::storage_class_specifier *storage_class_specifier;
   klp::ccp::ast::type_qualifier *type_qualifier;
+  klp::ccp::ast::address_space *address_space;
   klp::ccp::ast::type_qualifier_list *type_qualifier_list;
   klp::ccp::ast::type_specifier *type_specifier;
   klp::ccp::ast::struct_declaration *struct_declaration;
@@ -171,6 +175,7 @@ static void empty(klp::ccp::pp_tokens_range &loc)
 %destructor {} <struct_or_union_kind>
 %destructor { $$.~kind(); } <ext_int_kind>
 %destructor { $$.~kind(); } <ext_float_kind>
+%destructor {} <address_space_id>
 %destructor { delete $$; } <*>
 
 /* keyword tokens */
@@ -196,6 +201,7 @@ static void empty(klp::ccp::pp_tokens_range &loc)
 
 %token<ext_int_kind> TOK_KW_EXT_INT
 %token<ext_float_kind> TOK_KW_EXT_FLOAT
+%token<address_space_id> TOK_KW_ADDR_SPACE
 
 %token TOK_KW_AUTO_TYPE
 
@@ -343,6 +349,7 @@ static void empty(klp::ccp::pp_tokens_range &loc)
 %type <storage_class_specifier>	storage_class_specifier
 %type <type_specifier>	type_specifier_no_tdid
 %type <type_qualifier>	type_qualifier
+%type <address_space>	address_space
 %type <function_specifier>	function_specifier
 %type <attribute_specifier_list>	attribute_specifier_list_opt
 %type <attribute_specifier_list>	attribute_specifier_list
@@ -640,6 +647,15 @@ declaration_specifiers_w_non_att_no_ts:
 	  }
 	| declaration_specifiers_w_non_att_no_ts type_qualifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| address_space
+	  { $$ = new declaration_specifiers(std::move($1)); }
+	| attribute_specifier_list address_space
+	  {
+	    $$ = new declaration_specifiers(std::move($1));
+	    $$->extend(std::move($2));
+	  }
+	| declaration_specifiers_w_non_att_no_ts address_space
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| function_specifier
 	  { $$ = new declaration_specifiers(std::move($1)); }
 	| attribute_specifier_list function_specifier
@@ -669,6 +685,8 @@ declaration_specifiers_ts_no_tdid:
 	| declaration_specifiers_ts_no_tdid storage_class_specifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| declaration_specifiers_ts_no_tdid type_qualifier
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| declaration_specifiers_ts_no_tdid address_space
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| declaration_specifiers_ts_no_tdid function_specifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
@@ -776,6 +794,11 @@ type_qualifier:
 	  { $$ = new type_qualifier(@$, types::qualifier::q_restrict); }
 	| TOK_KW_VOLATILE
 	  { $$ = new type_qualifier(@$, types::qualifier::q_volatile); }
+;
+
+address_space:
+	TOK_KW_ADDR_SPACE
+	  { $$ = new address_space(@$, types::address_space{$1}); }
 ;
 
 function_specifier:
@@ -943,6 +966,10 @@ specifier_qualifier_list_no_ts:
 	  { $$ = new specifier_qualifier_list(std::move($1)); }
 	| specifier_qualifier_list_no_ts type_qualifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| address_space
+	  { $$ = new specifier_qualifier_list(std::move($1)); }
+	| specifier_qualifier_list_no_ts address_space
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| attribute_specifier_list %prec TOK_DUMMY_PRIO_GREEDY_ATTR_LIST
 	  { $$ = new specifier_qualifier_list(std::move($1)); }
 	| specifier_qualifier_list_no_ts attribute_specifier_list %prec TOK_DUMMY_PRIO_GREEDY_ATTR_LIST
@@ -958,6 +985,8 @@ specifier_qualifier_list_ts_no_tdid:
 	| specifier_qualifier_list_ts_no_tdid type_specifier_no_tdid
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| specifier_qualifier_list_ts_no_tdid type_qualifier
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| specifier_qualifier_list_ts_no_tdid address_space
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| specifier_qualifier_list_ts_no_tdid attribute_specifier_list %prec TOK_DUMMY_PRIO_GREEDY_ATTR_LIST
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
@@ -995,6 +1024,10 @@ type_qualifier_list:
 	type_qualifier
 	  { $$ = new type_qualifier_list(std::move($1)); }
 	| type_qualifier_list type_qualifier
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| address_space
+	  { $$ = new type_qualifier_list(std::move($1)); }
+	| type_qualifier_list address_space
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| attribute_specifier_list %prec TOK_DUMMY_PRIO_GREEDY_ATTR_LIST
 	  { $$ = new type_qualifier_list(std::move($1)); }
@@ -1675,6 +1708,11 @@ declaration_specifiers_not_starting_with_att_no_ts:
 	    $$ = new declaration_specifiers(std::move($1));
 	    $$->extend(std::move($2));
 	  }
+	| address_space declaration_specifiers_no_ts_opt
+	  {
+	    $$ = new declaration_specifiers(std::move($1));
+	    $$->extend(std::move($2));
+	  }
 	| function_specifier declaration_specifiers_no_ts_opt
 	  {
 	    $$ = new declaration_specifiers(std::move($1));
@@ -1697,6 +1735,8 @@ declaration_specifiers_not_starting_with_att_ts_no_tdid:
 	| declaration_specifiers_not_starting_with_att_ts_no_tdid storage_class_specifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| declaration_specifiers_not_starting_with_att_ts_no_tdid type_qualifier
+	  { $$ = MV_P($1); $$->extend(std::move($2)); }
+	| declaration_specifiers_not_starting_with_att_ts_no_tdid address_space
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
 	| declaration_specifiers_not_starting_with_att_ts_no_tdid function_specifier
 	  { $$ = MV_P($1); $$->extend(std::move($2)); }
