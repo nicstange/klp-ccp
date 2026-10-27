@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2019-2022, 2024-2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -1298,6 +1298,11 @@ target::ext_float_keywords target_gcc::get_ext_float_keywords() const
     kws.emplace(ts.first, ts.second);
 
   return kws;
+}
+
+target::address_space_keywords target_gcc::get_address_space_keywords() const
+{
+  return address_space_keywords{};
 }
 
 std::shared_ptr<const types::int_type>

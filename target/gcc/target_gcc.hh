@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2019-2021, 2024-2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -160,6 +160,11 @@ namespace klp
 	const override;
 
       virtual ext_float_keywords get_ext_float_keywords() const override;
+
+      // Named address spaces are an architecture specific extension,
+      // none by default.
+      virtual address_space_keywords get_address_space_keywords()
+	const override;
 
       virtual std::shared_ptr<const types::int_type>
       create_ptrdiff_type(const bool is_signed) const override;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2018-2021, 2025-2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -186,6 +186,20 @@ bool target_x86_64_gcc::is_wchar_signed() const noexcept
 bool target_x86_64_gcc::is_bitfield_default_signed() const noexcept
 {
   return true;
+}
+
+target::address_space_keywords
+target_x86_64_gcc::get_address_space_keywords() const
+{
+  address_space_keywords kws;
+
+  // Named address spaces came with GCC 6.1 on x86.
+  if (gcc_cmdline_parser::gcc_version{6, 1, 0} <= get_gcc_version()) {
+    kws.emplace("__seg_gs", address_space_seg_gs);
+    kws.emplace("__seg_fs", address_space_seg_fs);
+  }
+
+  return kws;
 }
 
 std::unique_ptr<execution_charset_encoder> target_x86_64_gcc::
@@ -547,6 +561,13 @@ void target_x86_64_gcc::_arch_register_builtin_macros(preprocessor &pp) const
 
   if (_is_int_mode_enabled(common_int_mode_kind::cimk_TI)) {
     pp.register_builtin_macro("__SIZEOF_INT128__", "16");
+  }
+
+  // GCC >= 6.1 announces its support for the __seg_fs and __seg_gs
+  // named address spaces, c.f. get_address_space_keywords().
+  if (gcc_cmdline_parser::gcc_version{6, 1, 0} <= get_gcc_version()) {
+    pp.register_builtin_macro("__SEG_FS", "1");
+    pp.register_builtin_macro("__SEG_GS", "1");
   }
 }
 
