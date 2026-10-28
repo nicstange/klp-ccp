@@ -488,6 +488,53 @@ void target_x86_64_gcc::_arch_option_override()
   _opts_x86.option_override();
 }
 
+// Extracted from the ix86_attribute_table (ix86_gnu_attributes as
+// of GCC 14) array in gcc/config/i386/i386.c resp.
+// i386-options.c(c) of the GCC X.1.0 releases, X = 5 ... 16,
+// omitting the entries conditional on
+// TARGET_DLLIMPORT_DECL_ATTRIBUTES, which is not set for Linux
+// targets, as well as attributes whose names are not valid
+// identifiers.
+const target_gcc::attribute_table_entry
+target_x86_64_gcc::_gnu_attributes[] = {
+  { "callee_pop_aggregate_return", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "cdecl", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "cf_check", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "fastcall", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "fentry_name", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "fentry_section", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "force_align_arg_pointer", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "function_return", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "gcc_struct", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "indirect_branch", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "indirect_return", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "interrupt", { 7, 1, 0 }, { 0, 0, 0 } },
+  { "ms_abi", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "ms_hook_prologue", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "ms_struct", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "naked", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "no_callee_saved_registers", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "no_caller_saved_registers", { 7, 1, 0 }, { 0, 0, 0 } },
+  { "nodirect_extern_access", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "preserve_none", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "regparm", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "sseregparm", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "stdcall", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "sysv_abi", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "thiscall", { 5, 1, 0 }, { 0, 0, 0 } },
+};
+
+bool target_x86_64_gcc::_arch_has_attribute(const std::string &ns,
+					    const std::string &name)
+  const noexcept
+{
+  if (ns != "gnu")
+    return false;
+
+  return _lookup_attribute_table(std::begin(_gnu_attributes),
+				 std::end(_gnu_attributes), name);
+}
+
 void target_x86_64_gcc::_arch_register_builtin_macros(preprocessor &pp) const
 {
   const std::initializer_list<std::pair<const char *, const char*>>

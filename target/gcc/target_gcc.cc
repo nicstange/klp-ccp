@@ -16,6 +16,7 @@
  * along with klp-ccp. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <algorithm>
 #include <cstring>
 #include <cstdint>
 #include "cmdline_except.hh"
@@ -4812,7 +4813,330 @@ void target_gcc::_register_builtin_macros(preprocessor &pp) const
   for (const auto &bom : builtin_object_macros)
     pp.register_builtin_macro(bom.first, bom.second);
 
+  // The __has_attribute() special builtin macro exists since GCC 5.
+  if (gcc_cmdline_parser::gcc_version{5, 1, 0} <= _gcc_version) {
+    pp.register_builtin_special_macro
+      ("__has_attribute", {"attribute"},
+       [this](const std::vector<std::vector<pp_token>> &exp_args,
+	      const preprocessor::builtin_special_macro_report_fatal_type
+		&report_fatal) {
+	 return this->_eval_has_attribute(exp_args, report_fatal);
+       });
+  }
+
   this->_arch_register_builtin_macros(pp);
+}
+
+// The attribute tables below have been extracted from the
+// c_common_attribute_table (c_common_gnu_attributes as of GCC 14),
+// c_common_format_attribute_table and c_common_clang_attributes
+// arrays in gcc/c-family/c-common.c resp. c-attribs.c(c) of the GCC
+// X.1.0 releases, X = 5 ... 16. Attributes whose names are not valid
+// identifiers (e.g. "no vops") are omitted, because they cannot be
+// queried through __has_attribute(). The C frontend's standard
+// attributes (std_attribute_table in gcc/c/c-decl.c(c)) are
+// registered without a namespace and thus, are not reachable through
+// __has_attribute() at all, c.f. _eval_has_attribute().
+//
+// Attributes from the "gnu" namespace.
+const target_gcc::attribute_table_entry target_gcc::_common_gnu_attributes[] = {
+  { "NSObject", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "access", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "alias", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "aligned", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "alloc_align", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "alloc_size", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "always_inline", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "artificial", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "assume", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "assume_aligned", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "bnd_instrument", { 5, 1, 0 }, { 9, 1, 0 } },
+  { "bnd_legacy", { 5, 1, 0 }, { 9, 1, 0 } },
+  { "bnd_variable_size", { 5, 1, 0 }, { 9, 1, 0 } },
+  { "btf_decl_tag", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "btf_type_tag", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "cleanup", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "cold", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "common", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "const", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "constructor", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "copy", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "counted_by", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "deprecated", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "designated_init", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "destructor", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "error", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "expected_throw", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "externally_visible", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "fallthrough", { 7, 1, 0 }, { 0, 0, 0 } },
+  { "fd_arg", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "fd_arg_read", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "fd_arg_write", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "flag_enum", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "flatten", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "format", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "format_arg", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "gnu_inline", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "hardbool", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "hot", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "ifunc", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "leaf", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "malloc", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "may_alias", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "mode", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "musttail", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "no_address_safety_analysis", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_icf", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_instrument_function", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_profile_instrument_function", { 7, 1, 0 }, { 0, 0, 0 } },
+  { "no_reorder", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_sanitize", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "no_sanitize_address", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_sanitize_coverage", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "no_sanitize_thread", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_sanitize_undefined", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_split_stack", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_stack_limit", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "no_stack_protector", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "nocf_check", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "noclone", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "nocommon", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "noinit", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "noinline", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "noipa", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "nonnull", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "nonnull_if_nonzero", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "nonstring", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "noplt", { 6, 1, 0 }, { 0, 0, 0 } },
+  { "noreturn", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "nothrow", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "null_terminated_string_arg", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "objc_nullability", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "objc_root_class", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "optimize", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "packed", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "patchable_function_entry", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "persistent", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "pure", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "reproducible", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "retain", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "returns_nonnull", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "returns_twice", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "scalar_storage_order", { 6, 1, 0 }, { 0, 0, 0 } },
+  { "section", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "sentinel", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "signed_bool_precision", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "simd", { 6, 1, 0 }, { 0, 0, 0 } },
+  { "stack_protect", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "strict_flex_array", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "strub", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "symver", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "tainted_args", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "target", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "target_clones", { 6, 1, 0 }, { 0, 0, 0 } },
+  { "target_version", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "tls_model", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_callable", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_may_cancel_outer", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_pure", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_safe", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_safe_dynamic", { 6, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_unsafe", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transaction_wrap", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "transparent_union", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "unavailable", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "uninitialized", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "unsequenced", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "unused", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "used", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "vector_mask", { 12, 1, 0 }, { 0, 0, 0 } },
+  { "vector_size", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "visibility", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "volatile", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "warn_if_not_aligned", { 8, 1, 0 }, { 0, 0, 0 } },
+  { "warn_unused", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "warn_unused_result", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "warning", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "weak", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "weakref", { 5, 1, 0 }, { 0, 0, 0 } },
+  { "zero_call_used_regs", { 11, 1, 0 }, { 0, 0, 0 } },
+};
+
+// Attributes from the "clang" namespace.
+const target_gcc::attribute_table_entry
+target_gcc::_common_clang_attributes[] = {
+  { "flag_enum", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "musttail", { 15, 1, 0 }, { 0, 0, 0 } },
+};
+
+namespace
+{
+  // Whether a token can be ignored when parsing an argument.
+  static bool _is_arg_ws(const pp_token &tok) noexcept
+  {
+    return tok.is_ws() || tok.is_newline() || tok.is_empty();
+  }
+
+  // GCC's canonicalize_attr_name() resp. extract_attribute_substring():
+  // strip leading and trailing double underscores.
+  static std::string _canonicalize_attr_name(const std::string &name)
+  {
+    if (name.length() > 4 &&
+	name.compare(0, 2, "__") == 0 &&
+	name.compare(name.length() - 2, 2, "__") == 0) {
+      return name.substr(2, name.length() - 4);
+    }
+    return name;
+  }
+}
+
+bool target_gcc::_lookup_attribute_table(const attribute_table_entry *begin,
+					 const attribute_table_entry *end,
+					 const std::string &name)
+  const noexcept
+{
+  for (const attribute_table_entry *e = begin; e != end; ++e) {
+    if (name != e->name)
+      continue;
+    if (!(e->since <= _gcc_version))
+      continue;
+    if (e->until.maj && !(_gcc_version < e->until))
+      continue;
+    return true;
+  }
+  return false;
+}
+
+bool target_gcc::_has_attribute(const std::string &ns,
+				const std::string &name) const noexcept
+{
+  // Mirror GCC's lookup_scoped_attribute_spec(): an attribute is
+  // found only in its own namespace.
+  if (ns == "gnu") {
+    if (_lookup_attribute_table(std::begin(_common_gnu_attributes),
+				std::end(_common_gnu_attributes), name)) {
+      return true;
+    }
+  } else if (ns == "clang") {
+    if (_lookup_attribute_table(std::begin(_common_clang_attributes),
+				std::end(_common_clang_attributes), name)) {
+      return true;
+    }
+  }
+
+  return this->_arch_has_attribute(ns, name);
+}
+
+pp_token target_gcc::
+_eval_has_attribute(const std::vector<std::vector<pp_token>> &exp_args,
+		    const preprocessor::builtin_special_macro_report_fatal_type
+		      &report_fatal) const
+{
+  // This mirrors c_common_has_attribute() from gcc/c-family/c-lex.c(c)
+  // in C mode.
+  assert(exp_args.size() == 1);
+  const std::vector<pp_token> &arg = exp_args[0];
+  // Indices of the operand's tokens which are not whitespace.
+  std::vector<std::size_t> toks;
+  for (std::size_t j = 0; j < arg.size(); ++j) {
+    if (!_is_arg_ws(arg[j]))
+      toks.push_back(j);
+  }
+  const auto tok = [&](const std::size_t i) -> const pp_token& {
+    return arg[toks[i]];
+  };
+
+  std::size_t i = 0;
+  if (i == toks.size() || !tok(i).is_id())
+    throw report_fatal("macro \"__has_attribute\" requires an identifier");
+
+  std::string name = _canonicalize_attr_name(tok(i).get_value());
+  ++i;
+
+  // The C frontend's __has_attribute() recognizes scoped attribute
+  // names since GCC 11, provided the operand's "::" has been lexed
+  // into a single scope token, which libcpp does only for the C2X
+  // language standards before GCC 14. Since GCC 14, two adjacent
+  // colons are accepted in all C modes. klp-ccp's tokenizer always
+  // emits two individual colon tokens, considered adjacent if
+  // nothing but placeholder empties sit inbetween.
+  const bool scope_supported =
+    (gcc_cmdline_parser::gcc_version{14, 1, 0} <= _gcc_version ||
+     (gcc_cmdline_parser::gcc_version{11, 1, 0} <= _gcc_version &&
+      (_opts_c_family.c_std == opts_c_family::c_lang_kind::clk_stdc2x ||
+       _opts_c_family.c_std == opts_c_family::c_lang_kind::clk_gnuc2x)));
+  bool scoped = false;
+  std::string ns;
+  if (scope_supported && i + 1 < toks.size() &&
+      tok(i).is_punctuator(":") && tok(i + 1).is_punctuator(":") &&
+      (std::all_of(arg.begin() + toks[i] + 1, arg.begin() + toks[i + 1],
+		   [](const pp_token &t) { return t.is_empty(); }))) {
+    i += 2;
+    if (i == toks.size() || !tok(i).is_id())
+      throw report_fatal("attribute identifier required after scope");
+    ns = std::move(name);
+    name = _canonicalize_attr_name(tok(i).get_value());
+    ++i;
+    scoped = true;
+  }
+
+  if (i != toks.size())
+    throw report_fatal("missing ')' after \"__has_attribute\"");
+
+  unsigned long result = 0;
+  if (!scoped) {
+    // Standard attributes queried without a scope evaluate to the
+    // date of the C standard revision introducing them rather than
+    // to 1, with the actual set depending on the GCC version.
+    const auto is_one_of =
+      [&](const std::initializer_list<const char *> &names) {
+	return (std::find_if(names.begin(), names.end(),
+			     [&](const char *n) { return name == n; })
+		!= names.end());
+      };
+    typedef gcc_cmdline_parser::gcc_version gcc_version;
+    if (_gcc_version < gcc_version{7, 1, 0}) {
+      if (name == "noreturn")
+	result = 200809;
+      else if (name == "deprecated")
+	result = 201309;
+    } else if (_gcc_version < gcc_version{11, 1, 0}) {
+      // Plain lookup results only.
+    } else if (_gcc_version < gcc_version{13, 1, 0}) {
+      if (is_one_of({"deprecated", "maybe_unused", "fallthrough"}))
+	result = 201904;
+      else if (name == "nodiscard")
+	result = 202003;
+    } else if (_gcc_version < gcc_version{14, 1, 0}) {
+      if (name == "deprecated")
+	result = 201904;
+      else if (name == "fallthrough")
+	result = 201910;
+      else if (name == "nodiscard")
+	result = 202003;
+      else if (name == "maybe_unused")
+	result = 202106;
+      else if (is_one_of({"noreturn", "_Noreturn"}))
+	result = 202202;
+    } else if (_gcc_version < gcc_version{15, 1, 0}) {
+      if (is_one_of({"deprecated", "fallthrough", "maybe_unused",
+		     "nodiscard", "noreturn", "_Noreturn"})) {
+	result = 202311;
+      }
+    } else {
+      if (is_one_of({"deprecated", "fallthrough", "maybe_unused",
+		     "nodiscard", "noreturn", "_Noreturn",
+		     "reproducible", "unsequenced"})) {
+	result = 202311;
+      }
+    }
+    ns = "gnu";
+  }
+
+  if (!result && _has_attribute(ns, name))
+    result = 1;
+
+  return pp_token{pp_token::type::pp_number, std::to_string(result)};
 }
 
 namespace

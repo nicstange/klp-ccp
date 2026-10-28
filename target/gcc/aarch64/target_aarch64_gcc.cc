@@ -352,6 +352,47 @@ void target_aarch64_gcc::_arch_option_override()
   _opts_aarch64.option_override();
 }
 
+// Extracted from the aarch64_attribute_table (aarch64_gnu_attributes
+// and aarch64_arm_attributes as of GCC 14) arrays in
+// gcc/config/aarch64/aarch64.c(c) of the GCC X.1.0 releases, X = 5
+// ... 16, omitting attributes whose names are not valid identifiers.
+const target_gcc::attribute_table_entry
+target_aarch64_gcc::_gnu_attributes[] = {
+  { "aarch64_vector_pcs", { 9, 1, 0 }, { 0, 0, 0 } },
+  { "arm_sve_vector_bits", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "dllexport", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "dllimport", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "indirect_return", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "preserve_none", { 16, 1, 0 }, { 0, 0, 0 } },
+};
+
+const target_gcc::attribute_table_entry
+target_aarch64_gcc::_arm_attributes[] = {
+  { "in", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "inout", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "locally_streaming", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "new", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "out", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "preserves", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "streaming", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "streaming_compatible", { 14, 1, 0 }, { 0, 0, 0 } },
+};
+
+bool target_aarch64_gcc::_arch_has_attribute(const std::string &ns,
+					     const std::string &name)
+  const noexcept
+{
+  if (ns == "gnu") {
+    return _lookup_attribute_table(std::begin(_gnu_attributes),
+				   std::end(_gnu_attributes), name);
+  } else if (ns == "arm") {
+    return _lookup_attribute_table(std::begin(_arm_attributes),
+				   std::end(_arm_attributes), name);
+  }
+
+  return false;
+}
+
 void target_aarch64_gcc::_arch_register_builtin_macros(preprocessor &pp) const
 {
   // the trick: aarch64-suse-linux-gcc -dM -E - < /dev/null

@@ -112,6 +112,12 @@ namespace klp
       virtual void _arch_register_builtin_macros(preprocessor &pp)
 	const override;
 
+      virtual bool _arch_has_attribute(const std::string &ns,
+				       const std::string &name)
+	const noexcept override;
+
+      static const attribute_table_entry _gnu_attributes[];
+
       struct opts_x86
       {
       public:

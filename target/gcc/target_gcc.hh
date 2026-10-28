@@ -467,6 +467,42 @@ namespace klp
       virtual void _arch_register_builtin_macros(preprocessor &pp) const = 0;
 
     protected:
+      // Entry of an attribute table as consulted by the
+      // __has_attribute() implementation: the attribute is known to
+      // GCC releases >= since and, unless until is zero, < until.
+      struct attribute_table_entry
+      {
+	const char *name;
+	gcc_cmdline_parser::gcc_version since;
+	gcc_cmdline_parser::gcc_version until;
+      };
+
+      bool _lookup_attribute_table(const attribute_table_entry *begin,
+				   const attribute_table_entry *end,
+				   const std::string &name) const noexcept;
+
+    private:
+      // Whether the attribute with the given (canonicalized, i.e.
+      // with enclosing double underscores stripped) name in attribute
+      // namespace ns is known to the architecture specific GCC
+      // backend.
+      virtual bool _arch_has_attribute(const std::string &ns,
+				       const std::string &name)
+	const noexcept = 0;
+
+      bool _has_attribute(const std::string &ns, const std::string &name)
+	const noexcept;
+
+      static const attribute_table_entry _common_gnu_attributes[];
+      static const attribute_table_entry _common_clang_attributes[];
+
+      pp_token
+      _eval_has_attribute
+	(const std::vector<std::vector<pp_token>> &exp_args,
+	 const preprocessor::builtin_special_macro_report_fatal_type
+	   &report_fatal) const;
+
+    protected:
       enum class common_int_mode_kind
       {
 	cimk_QI,
