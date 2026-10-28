@@ -3393,6 +3393,9 @@ namespace klp
 	template <typename callable_type>
 	void for_each_storage_class_specifier(callable_type &&c) const;
 
+	template <typename callable_type>
+	void for_each_function_specifier(callable_type &&c) const;
+
       private:
 	virtual _ast_entity* _get_child(const size_t i) const noexcept override;
 

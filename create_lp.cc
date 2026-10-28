@@ -8661,6 +8661,11 @@ namespace
 	 const pp_tokens_range &bounding_range,
 	 depreprocessor::transformed_input_chunk &tic);
 
+    void _remove_function_specifiers
+	(const ast::declaration_specifiers &ds,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic);
+
     void _rewrite_references(const deps_on &deps,
 			     depreprocessor::transformed_input_chunk &tic);
 
@@ -9097,6 +9102,8 @@ bool _lp_writer::_emit(function_init_declarator_info &fidi,
       (ds, {id.get_asl_before(), id.get_asl_middle(), id.get_asl_after()},
        true, fi.externalized_sym_mod.make_pointer,
        di.declaration.get_tokens_range(), tic);
+    if (fi.externalized_sym_mod.make_pointer)
+      _remove_function_specifiers(ds, di.declaration.get_tokens_range(), tic);
 
     _d.append(std::move(tic));
     anything_emitted = true;
@@ -9263,6 +9270,8 @@ bool _lp_writer::_emit(function_definition_info &fdi,
     _remove_externalization_attrs(ds, {fd.get_asl()}, true,
 				  fi.externalized_sym_mod.make_pointer,
 				  fd.get_tokens_range(), tic);
+    if (fi.externalized_sym_mod.make_pointer)
+      _remove_function_specifiers(ds, fd.get_tokens_range(), tic);
 
     _d.append(std::move(tic));
     anything_emitted = true;
@@ -9299,11 +9308,13 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 	    const function_info &fi = fidi_in_fd.fi;
 	    const ast::init_declarator &id = fidi_in_fd.init_declarator;
 	    if (fi.externalize &&
-		_externalization_attrs_need_removal
-		  (ds_in_fd,
-		   {id.get_asl_before(), id.get_asl_middle(),
-		    id.get_asl_after()},
-		   true, fi.externalized_sym_mod.make_pointer)) {
+		(_externalization_attrs_need_removal
+		   (ds_in_fd,
+		    {id.get_asl_before(), id.get_asl_middle(),
+		     id.get_asl_after()},
+		    true, fi.externalized_sym_mod.make_pointer) ||
+		 (fi.externalized_sym_mod.make_pointer &&
+		  ds_in_fd.is_inline()))) {
 	      need_split = true;
 	    }
 	  },
@@ -9415,6 +9426,11 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 		    id.get_asl_after()},
 		   true, fidi_in_fd_fi.externalized_sym_mod.make_pointer,
 		   di_in_fd.declaration.get_tokens_range(), decl_tic);
+		if (fidi_in_fd_fi.externalized_sym_mod.make_pointer) {
+		  _remove_function_specifiers
+		    (ds_in_fd, di_in_fd.declaration.get_tokens_range(),
+		     decl_tic);
+		}
 	      } else if (referenced_fdi &&
 			 (referenced_fdi->is_patched ||
 			  referenced_fdi->rewrite_needed)) {
@@ -10281,6 +10297,40 @@ void _lp_writer::_remove_externalization_attrs
        }
 
        return true;
+     });
+}
+
+// Remove the function specifiers, i.e. 'inline', from a function's
+// declaration specifiers for a make_pointer externalization: the
+// declared entity becomes a pointer variable and GCC would warn about
+// a variable declared 'inline'.
+void _lp_writer::_remove_function_specifiers
+	(const ast::declaration_specifiers &ds,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic)
+{
+  const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
+
+  auto &&is_ws =
+    [&](const pp_token_index i) {
+      return toks[i].is_type_any_of<pp_token::type::ws,
+				    pp_token::type::newline>();
+    };
+
+  ds.for_each_function_specifier
+    ([&](const ast::function_specifier &fs) {
+       // Remove the specifier including the whitespace separating it
+       // from its neighbours: the preceding one if there is any
+       // within the bounding range, the trailing one otherwise.
+       pp_tokens_range r = fs.get_tokens_range();
+       if (r.begin != bounding_range.begin) {
+	 while (r.begin != bounding_range.begin && is_ws(r.begin - 1))
+	   --r.begin;
+       } else {
+	 while (r.end != bounding_range.end && is_ws(r.end))
+	   ++r.end;
+       }
+       tic.purge_subrange(r, false);
      });
 }
 

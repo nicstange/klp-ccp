@@ -852,6 +852,14 @@ namespace klp
       }
 
       template <typename callable_type>
+      void declaration_specifiers::
+      for_each_function_specifier(callable_type &&c) const
+      {
+	for (auto fs : _fss)
+	  c(const_cast<const function_specifier&>(fs.get()));
+      }
+
+      template <typename callable_type>
       void designator_list::for_each(callable_type &&c) const
       {
 	for (auto d : _ds)
