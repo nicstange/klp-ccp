@@ -495,7 +495,7 @@ void target_x86_64_gcc::_arch_option_override()
 // TARGET_DLLIMPORT_DECL_ATTRIBUTES, which is not set for Linux
 // targets, as well as attributes whose names are not valid
 // identifiers.
-const target_gcc::attribute_table_entry
+const target_gcc::versioned_name_table_entry
 target_x86_64_gcc::_gnu_attributes[] = {
   { "callee_pop_aggregate_return", { 5, 1, 0 }, { 0, 0, 0 } },
   { "cdecl", { 5, 1, 0 }, { 0, 0, 0 } },
@@ -531,8 +531,64 @@ bool target_x86_64_gcc::_arch_has_attribute(const std::string &ns,
   if (ns != "gnu")
     return false;
 
-  return _lookup_attribute_table(std::begin(_gnu_attributes),
+  return _lookup_versioned_name_table(std::begin(_gnu_attributes),
 				 std::end(_gnu_attributes), name);
+}
+
+// The x86 builtins declared independently of the enabled ISA
+// extensions, extracted from the entries with zero ISA masks in
+// gcc/config/i386/i386-builtin.def and from ix86_init_builtins() &
+// co. in gcc/config/i386/i386-builtins.c(c) of the GCC X.1.0
+// releases, X = 10 ... 16. All other __builtin_ia32_* builtins get
+// declared only if their ISA extension is enabled and are not
+// reported by __has_builtin() for now.
+const target_gcc::versioned_name_table_entry target_x86_64_gcc::_builtins[] = {
+  { "__builtin_copysignq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_cpu_init", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_cpu_is", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_cpu_supports", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_fabsq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_huge_valq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_addcarryx_u32", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_addcarryx_u64", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_bsrdi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_bsrsi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_fldenv", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_fnclex", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_fnstenv", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_fnstsw", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_pause", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_prefetch", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rdpmc", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rdtsc", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rdtscp", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_readeflags_u32", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_readeflags_u64", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rolhi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rolqi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rorhi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_rorqi", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_sbb_u32", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_sbb_u64", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_wbinvd", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_writeeflags_u32", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ia32_writeeflags_u64", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_infq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ms_va_copy", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ms_va_end", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_ms_va_start", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_nanq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_nansq", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_sysv_va_copy", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_sysv_va_end", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_sysv_va_start", { 10, 1, 0 }, { 0, 0, 0 } },
+};
+
+bool target_x86_64_gcc::_arch_has_builtin(const std::string &name)
+  const noexcept
+{
+  return _lookup_versioned_name_table(std::begin(_builtins),
+				      std::end(_builtins), name);
 }
 
 void target_x86_64_gcc::_arch_register_builtin_macros(preprocessor &pp) const

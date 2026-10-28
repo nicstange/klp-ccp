@@ -83,11 +83,9 @@ namespace klp
       // single result token. Errors are reported by throwing the
       // exception obtained from the report_fatal callback, which
       // attributes the message to the invocation.
-      typedef std::function<pp_except(const std::string&)>
-	builtin_special_macro_report_fatal_type;
       typedef std::function<pp_token
 			    (const std::vector<std::vector<pp_token>> &exp_args,
-			     const builtin_special_macro_report_fatal_type
+			     const std::function<pp_except(const std::string&)>
 				&report_fatal)>
 	builtin_special_macro_handler;
 

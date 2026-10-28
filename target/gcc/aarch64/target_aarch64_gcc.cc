@@ -356,7 +356,7 @@ void target_aarch64_gcc::_arch_option_override()
 // and aarch64_arm_attributes as of GCC 14) arrays in
 // gcc/config/aarch64/aarch64.c(c) of the GCC X.1.0 releases, X = 5
 // ... 16, omitting attributes whose names are not valid identifiers.
-const target_gcc::attribute_table_entry
+const target_gcc::versioned_name_table_entry
 target_aarch64_gcc::_gnu_attributes[] = {
   { "aarch64_vector_pcs", { 9, 1, 0 }, { 0, 0, 0 } },
   { "arm_sve_vector_bits", { 10, 1, 0 }, { 0, 0, 0 } },
@@ -366,7 +366,7 @@ target_aarch64_gcc::_gnu_attributes[] = {
   { "preserve_none", { 16, 1, 0 }, { 0, 0, 0 } },
 };
 
-const target_gcc::attribute_table_entry
+const target_gcc::versioned_name_table_entry
 target_aarch64_gcc::_arm_attributes[] = {
   { "in", { 14, 1, 0 }, { 0, 0, 0 } },
   { "inout", { 14, 1, 0 }, { 0, 0, 0 } },
@@ -383,14 +383,98 @@ bool target_aarch64_gcc::_arch_has_attribute(const std::string &ns,
   const noexcept
 {
   if (ns == "gnu") {
-    return _lookup_attribute_table(std::begin(_gnu_attributes),
+    return _lookup_versioned_name_table(std::begin(_gnu_attributes),
 				   std::end(_gnu_attributes), name);
   } else if (ns == "arm") {
-    return _lookup_attribute_table(std::begin(_arm_attributes),
+    return _lookup_versioned_name_table(std::begin(_arm_attributes),
 				   std::end(_arm_attributes), name);
   }
 
   return false;
+}
+
+// The aarch64 builtins declared unconditionally by
+// aarch64_general_init_builtins() in
+// gcc/config/aarch64/aarch64-builtins.c(c) of the GCC X.1.0
+// releases, X = 10 ... 16: the floating point status/control, CRC32,
+// reciprocal square root, random number, JCVT, pointer
+// authentication, data processing, system register, prefetch (GCC 14
+// and 15, provided through <arm_acle.h> afterwards), GCS and store
+// hint builtins. The Advanced SIMD builtins (iterator generated
+// names) as well as the ones declared only with the corresponding
+// feature enabled or upon inclusion of <arm_acle.h> (TME, MTE, LS64)
+// are not reported by __has_builtin() for now.
+const target_gcc::versioned_name_table_entry target_aarch64_gcc::_builtins[] = {
+  { "__builtin_aarch64_get_fpcr", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_set_fpcr", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_get_fpsr", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_set_fpsr", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_get_fpcr64", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_set_fpcr64", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_get_fpsr64", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_set_fpsr64", { 11, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32b", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32h", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32w", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32x", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32cb", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32ch", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32cw", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_crc32cx", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsqrt_df", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsqrt_sf", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsqrt_v2df", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsqrt_v2sf", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsqrt_v4sf", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rndr", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rndrrs", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_jcvtzs", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_autia1716", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_pacia1716", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_autib1716", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_pacib1716", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_xpaclri", { 10, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rev16", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rev16l", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rev16ll", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rbit", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rbitl", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rbitll", { 13, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsr", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsrp", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsr64", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsrf", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsrf64", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_rsr128", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsr", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsrp", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsr64", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsrf", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsrf64", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_wsr128", { 14, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_pld", { 14, 1, 0 }, { 16, 1, 0 } },
+  { "__builtin_aarch64_pli", { 14, 1, 0 }, { 16, 1, 0 } },
+  { "__builtin_aarch64_pldx", { 14, 1, 0 }, { 16, 1, 0 } },
+  { "__builtin_aarch64_plix", { 14, 1, 0 }, { 16, 1, 0 } },
+  { "__builtin_aarch64_chkfeat", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_gcspr", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_gcspopm", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_gcsss", { 15, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_qi", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_hi", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_si", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_di", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_sf", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_df", { 16, 1, 0 }, { 0, 0, 0 } },
+  { "__builtin_aarch64_stshh_ptr", { 16, 1, 0 }, { 0, 0, 0 } },
+};
+
+bool target_aarch64_gcc::_arch_has_builtin(const std::string &name)
+  const noexcept
+{
+  return _lookup_versioned_name_table(std::begin(_builtins),
+				      std::end(_builtins), name);
 }
 
 void target_aarch64_gcc::_arch_register_builtin_macros(preprocessor &pp) const

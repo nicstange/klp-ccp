@@ -336,4 +336,6 @@ EXTRA_DIST = ccp.exp				\
 	x86_64-has-attribute-2.c.expected	\
 	x86_64-has-attribute-3.c		\
 	x86_64-has-attribute-4.c		\
-	x86_64-has-attribute-5.c
+	x86_64-has-attribute-5.c		\
+	x86_64-has-builtin-1.c		\
+	x86_64-has-builtin-1.c.expected

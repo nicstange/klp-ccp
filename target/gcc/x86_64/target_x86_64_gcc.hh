@@ -116,7 +116,12 @@ namespace klp
 				       const std::string &name)
 	const noexcept override;
 
-      static const attribute_table_entry _gnu_attributes[];
+      static const versioned_name_table_entry _gnu_attributes[];
+
+      virtual bool _arch_has_builtin(const std::string &name)
+	const noexcept override;
+
+      static const versioned_name_table_entry _builtins[];
 
       struct opts_x86
       {
