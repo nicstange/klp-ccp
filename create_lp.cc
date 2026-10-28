@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019  SUSE Software Solutions Germany GmbH
+ * Copyright (C) 2019-2022, 2024-2026  SUSE Software Solutions Germany GmbH
  *
  * This file is part of klp-ccp.
  *
@@ -8409,10 +8409,175 @@ void _lp_deps_resolver::_orig_decls_wl::add(const dep_on_decl_type &d,
 
 namespace
 {
+  // How to treat a GCC attribute found on the original declaration
+  // or definition of an externalized object or function when emitting
+  // the externalization declaration.
+  enum class externalization_attr_action
+  {
+    // Keep the attribute as is, either because it is still correct
+    // or because it is ineffective and silently accepted on the
+    // externalization declaration. Keeping an attribute means no
+    // edit, which is what allows to retain macro invocations like
+    // the kernel's __cold or __ro_after_init in the output.
+    keep,
+    // Remove the attribute: it would either alter the meaning of the
+    // externalization declaration or get rejected or ignored with a
+    // -Wattributes warning by the compiler.
+    remove,
+    // The attribute is part of the externalized object's type and
+    // would have to be moved onto the pointed-to type for a
+    // make_pointer externalization. Not supported.
+    unsupported,
+  };
+
+  bool _attr_in_set(const std::string &name,
+		    const std::initializer_list<const char*> &set) noexcept
+  {
+    // The sets are kept sorted.
+    return std::binary_search(set.begin(), set.end(), name,
+			      [](const std::string &a, const std::string &b) {
+				return a < b;
+			      });
+  }
+
+  // Classify an attribute with respect to the externalization
+  // declaration to be emitted for an object or a function. The
+  // externalization declaration either declares a pointer to the
+  // externalized entity (make_pointer) or redeclares the original
+  // entity as extern.
+  //
+  // With make_pointer, the declared entity changes its kind to a
+  // pointer object: anything describing the original's storage,
+  // symbol or function body would now apply to the pointer and is
+  // removed, as are function attributes GCC accepts on function
+  // declarations only, because these would get ignored with a
+  // warning when applied to a pointer variable. Attributes which GCC
+  // redirects to the pointed-to function type, like the calling
+  // convention and the call semantics ones, remain correct and are
+  // kept.
+  //
+  // For a plain extern redeclaration, attributes describing the
+  // definition's storage are silently ignored by GCC and kept, type
+  // and call semantics attributes remain correct. Removed are those
+  // which would turn the declaration into a definition (alias,
+  // ifunc, weakref), alter the reference semantics (weak,
+  // visibility), describe the definition's exported symbol (symver),
+  // require the function body (always_inline, target_clones) or
+  // provoke warnings on non-definitions (retain, used on objects).
+  //
+  // Unknown attributes are kept, like unknown ones in general on the
+  // assumption that keeping is the minimal edit. For function
+  // make_pointer externalizations, where most GCC attributes are
+  // declaration-only, a warning is issued for unknown attributes.
+  externalization_attr_action
+  _classify_externalization_attr(const std::string &attr_name,
+				 const bool is_function,
+				 const bool make_pointer,
+				 bool &unknown)
+  {
+    // GCC accepts attribute names enclosed in double underscores,
+    // normalize.
+    std::string name = attr_name;
+    if (name.size() > 4 && name.compare(0, 2, "__") == 0 &&
+	name.compare(name.size() - 2, 2, "__") == 0) {
+      name = name.substr(2, name.size() - 4);
+    }
+    unknown = false;
+
+    if (!is_function) {
+      if (make_pointer) {
+	if (_attr_in_set(name, {"mode", "vector_size"}))
+	  return externalization_attr_action::unsupported;
+
+	if (_attr_in_set(name, {
+	      "alias", "aligned", "common", "copy", "externally_visible",
+	      "no_reorder", "nocommon", "noinit", "nonstring", "persistent",
+	      "retain", "section", "symver", "tls_model", "used",
+	      "visibility", "warn_if_not_aligned", "weak", "weakref"
+	    })) {
+	  return externalization_attr_action::remove;
+	}
+
+	return externalization_attr_action::keep;
+
+      } else {
+	// Note that GCC accepts 'used' only on definitions of
+	// objects and would warn otherwise.
+	if (_attr_in_set(name, {
+	      "alias", "retain", "symver", "used", "visibility", "weak",
+	      "weakref"
+	    })) {
+	  return externalization_attr_action::remove;
+	}
+
+	return externalization_attr_action::keep;
+      }
+
+    } else {
+      if (make_pointer) {
+	// Attributes applying to function types, either by
+	// definition or by GCC redirecting them from a
+	// pointer-to-function variable to the pointed-to type.
+	if (_attr_in_set(name, {
+	      "access", "alloc_align", "alloc_size", "assume_aligned",
+	      "cdecl", "const", "deprecated", "fastcall", "fd_arg",
+	      "fd_arg_read", "fd_arg_write", "format", "format_arg",
+	      "indirect_return", "ms_abi", "no_caller_saved_registers",
+	      "nocf_check", "nonnull", "noreturn",
+	      "null_terminated_string_arg", "regparm", "reproducible",
+	      "returns_nonnull", "sentinel", "sseregparm", "stdcall", "strub",
+	      "sysv_abi", "thiscall", "transparent_union", "unavailable",
+	      "unsequenced", "unused", "warn_unused_result"
+	    })) {
+	  return externalization_attr_action::keep;
+	}
+
+	// Attributes describing the function's storage, symbol or
+	// body, or ones GCC accepts on function declarations only.
+	if (_attr_in_set(name, {
+	      "alias", "aligned", "always_inline", "artificial", "cf_check",
+	      "cold", "constructor", "copy", "destructor", "error",
+	      "expected_throw", "externally_visible", "fentry_name",
+	      "fentry_section", "flatten", "force_align_arg_pointer",
+	      "function_return", "gnu_inline", "hot", "ifunc",
+	      "indirect_branch", "interrupt", "leaf", "malloc",
+	      "ms_hook_prologue", "naked", "no_address_safety_analysis",
+	      "no_icf", "no_instrument_function",
+	      "no_profile_instrument_function", "no_reorder", "no_sanitize",
+	      "no_sanitize_address", "no_sanitize_coverage",
+	      "no_sanitize_thread", "no_sanitize_undefined", "no_split_stack",
+	      "no_stack_limit", "no_stack_protector", "noclone", "noinline",
+	      "noipa", "noplt", "nothrow", "optimize",
+	      "patchable_function_entry", "pure", "retain", "returns_twice",
+	      "section", "simd", "stack_protect", "symver", "tainted_args",
+	      "target", "target_clones", "used", "visibility", "warning",
+	      "weak", "weakref", "zero_call_used_regs"
+	    })) {
+	  return externalization_attr_action::remove;
+	}
+
+	unknown = true;
+	return externalization_attr_action::keep;
+
+      } else {
+	if (_attr_in_set(name, {
+	      "alias", "always_inline", "constructor", "destructor", "ifunc",
+	      "retain", "symver", "target_clones", "visibility", "weak",
+	      "weakref"
+	    })) {
+	  return externalization_attr_action::remove;
+	}
+
+	return externalization_attr_action::keep;
+      }
+    }
+  }
+
   class _lp_writer
   {
   public:
-    _lp_writer(ast_info &ai, depreprocessor &d) noexcept;
+    _lp_writer(ast_info &ai, depreprocessor &d,
+	       code_remarks &remarks) noexcept;
 
     void operator()();
 
@@ -8475,6 +8640,27 @@ namespace
 			    const ast::storage_class new_sc,
 			    depreprocessor::transformed_input_chunk &tic);
 
+    typedef std::initializer_list<const ast::attribute_specifier_list*>
+      _attribute_specifier_lists;
+
+    bool _externalization_attrs_need_removal
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer);
+
+    void _remove_externalization_attrs
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic);
+
+    void _remove_externalization_attrs
+	(const ast::attribute_specifier_list &asl,
+	 const bool is_function, const bool make_pointer,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic);
+
     void _rewrite_references(const deps_on &deps,
 			     depreprocessor::transformed_input_chunk &tic);
 
@@ -8492,11 +8678,13 @@ namespace
 
     ast_info &_ai;
     depreprocessor &_d;
+    code_remarks &_remarks;
   };
 }
 
-_lp_writer::_lp_writer(ast_info &ai, depreprocessor &d) noexcept
-  : _ai(ai), _d(d)
+_lp_writer::_lp_writer(ast_info &ai, depreprocessor &d,
+		       code_remarks &remarks) noexcept
+  : _ai(ai), _d(d), _remarks(remarks)
 {}
 
 void _lp_writer::operator()()
@@ -8905,6 +9093,10 @@ bool _lp_writer::_emit(function_init_declarator_info &fidi,
     _apply_linkage_change_for_fun(fi.externalized_sym_mod.sym_mod.new_linkage,
 				  fi.externalized_sym_mod.make_pointer,
 				  l, ds, scs, tic);
+    _remove_externalization_attrs
+      (ds, {id.get_asl_before(), id.get_asl_middle(), id.get_asl_after()},
+       true, fi.externalized_sym_mod.make_pointer,
+       di.declaration.get_tokens_range(), tic);
 
     _d.append(std::move(tic));
     anything_emitted = true;
@@ -9010,6 +9202,11 @@ bool _lp_writer::_emit(object_init_declarator_info &oidi,
       break;
     }
 
+    _remove_externalization_attrs
+      (ds, {id.get_asl_before(), id.get_asl_middle(), id.get_asl_after()},
+       false, oi.externalized_sym_mod.make_pointer,
+       di.declaration.get_tokens_range(), tic);
+
     _d.append(std::move(tic));
     anything_emitted = true;
 
@@ -9063,6 +9260,9 @@ bool _lp_writer::_emit(function_definition_info &fdi,
     _apply_linkage_change_for_fun(fi.externalized_sym_mod.sym_mod.new_linkage,
 				  fi.externalized_sym_mod.make_pointer,
 				  l, ds, scs, tic);
+    _remove_externalization_attrs(ds, {fd.get_asl()}, true,
+				  fi.externalized_sym_mod.make_pointer,
+				  fd.get_tokens_range(), tic);
 
     _d.append(std::move(tic));
     anything_emitted = true;
@@ -9086,27 +9286,47 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 
     for (const auto &di_in_fd : fdi.get_declarations()) {
       bool need_split = false;
+      const ast::declaration_specifiers &ds_in_fd =
+	di_in_fd.declaration.get_declaration_specifiers();
       di_in_fd.init_declarators.for_each
 	(wrap_callables<no_default_action>
-	 ([](const function_init_declarator_info &fidi_in_fd) {
+	 ([&](const function_init_declarator_info &fidi_in_fd) {
 	    // Function declarations within function definitions
 	    // always will have an "extern" storage class specifier
 	    // and it will be kept this way, independent of if and
-	    // how externalization is to be done.
+	    // how externalization is to be done. Attributes might
+	    // have to get removed though.
+	    const function_info &fi = fidi_in_fd.fi;
+	    const ast::init_declarator &id = fidi_in_fd.init_declarator;
+	    if (fi.externalize &&
+		_externalization_attrs_need_removal
+		  (ds_in_fd,
+		   {id.get_asl_before(), id.get_asl_middle(),
+		    id.get_asl_after()},
+		   true, fi.externalized_sym_mod.make_pointer)) {
+	      need_split = true;
+	    }
 	  },
 	  [&](const object_init_declarator_info &oidi_in_fd) {
 	    const object_info &oi = oidi_in_fd.oi;
 	    if (oi.externalize) {
 	      const ast::linkage &l =
 		oidi_in_fd.init_declarator.get_linkage();
+	      const ast::init_declarator &id = oidi_in_fd.init_declarator;
 	      if (oidi_in_fd.get_initializer() ||
 		  (l.get_linkage_kind() == ast::linkage::linkage_kind::none &&
 		   (oi.externalized_sym_mod.sym_mod.new_linkage !=
-		    linkage_change::lc_none))) {
-		// Either the initializer must get dropped or the
+		    linkage_change::lc_none)) ||
+		  _externalization_attrs_need_removal
+		    (ds_in_fd,
+		     {id.get_asl_before(), id.get_asl_middle(),
+		      id.get_asl_after()},
+		     false, oi.externalized_sym_mod.make_pointer)) {
+		// Either the initializer must get dropped, the
 		// declaration storage classifier will be changed from
 		// "static" to "extern" (independent of whether the
-		// new linkage will be internal or external).
+		// new linkage will be internal or external) or
+		// attributes have to be removed.
 		need_split = true;
 	      }
 	    }
@@ -9188,6 +9408,13 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 		  (fidi_in_fd_fi.externalized_sym_mod.sym_mod,
 		   fidi_in_fd_fi.externalized_sym_mod.make_pointer,
 		   id_tok_pos, decl_tic);
+		const ast::init_declarator &id = fidi_in_fd.init_declarator;
+		_remove_externalization_attrs
+		  (ds_in_fd,
+		   {id.get_asl_before(), id.get_asl_middle(),
+		    id.get_asl_after()},
+		   true, fidi_in_fd_fi.externalized_sym_mod.make_pointer,
+		   di_in_fd.declaration.get_tokens_range(), decl_tic);
 	      } else if (referenced_fdi &&
 			 (referenced_fdi->is_patched ||
 			  referenced_fdi->rewrite_needed)) {
@@ -9232,6 +9459,13 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 		  (oidi_in_fd_oi.externalized_sym_mod.sym_mod,
 		   oidi_in_fd_oi.externalized_sym_mod.make_pointer,
 		   id_tok_pos, decl_tic);
+		const ast::init_declarator &id = oidi_in_fd.init_declarator;
+		_remove_externalization_attrs
+		  (ds_in_fd,
+		   {id.get_asl_before(), id.get_asl_middle(),
+		    id.get_asl_after()},
+		   false, oidi_in_fd_oi.externalized_sym_mod.make_pointer,
+		   di_in_fd.declaration.get_tokens_range(), decl_tic);
 	      } else if (oidi_in_fd.get_initializer()) {
 		_rewrite_references(oidi_in_fd.get_initializer()->deps,
 				    decl_tic);
@@ -9888,6 +10122,168 @@ _set_storage_class(const ast::declaration_specifiers &ds,
   }
 }
 
+bool _lp_writer::_externalization_attrs_need_removal
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer)
+{
+  const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
+  bool unknown;
+  auto &&check_attr =
+    [&](const ast::attribute &attr) {
+      const std::string &name = toks[attr.get_name_tok()].get_value();
+      return (_classify_externalization_attr(name, is_function, make_pointer,
+					     unknown) ==
+	      externalization_attr_action::keep);
+    };
+
+  if (!ds.for_each_attribute_specifier_list
+      ([&](const ast::attribute_specifier_list &asl) {
+	 return asl.for_each_attribute(check_attr);
+       })) {
+    return true;
+  }
+
+  for (const ast::attribute_specifier_list * const asl : asls) {
+    if (asl && !asl->for_each_attribute(check_attr))
+      return true;
+  }
+
+  return false;
+}
+
+// Remove the attributes not to be retained on an externalization
+// declaration from the declaration specifiers and the given
+// attribute specifier lists attached to the declarator. Attributes
+// within the declarator, e.g. on pointer derivations, are part of
+// the type and left alone.
+void _lp_writer::_remove_externalization_attrs
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic)
+{
+  ds.for_each_attribute_specifier_list
+    ([&](const ast::attribute_specifier_list &asl) {
+       _remove_externalization_attrs(asl, is_function, make_pointer,
+				     bounding_range, tic);
+       return true;
+     });
+
+  for (const ast::attribute_specifier_list * const asl : asls) {
+    if (asl) {
+      _remove_externalization_attrs(*asl, is_function, make_pointer,
+				    bounding_range, tic);
+    }
+  }
+}
+
+void _lp_writer::_remove_externalization_attrs
+	(const ast::attribute_specifier_list &asl,
+	 const bool is_function, const bool make_pointer,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic)
+{
+  const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
+
+  auto &&is_ws =
+    [&](const pp_token_index i) {
+      return toks[i].is_type_any_of<pp_token::type::ws,
+				    pp_token::type::newline>();
+    };
+
+  asl.for_each_attribute_specifier
+    ([&](const ast::attribute_specifier &as) {
+       // Classify the specifier's attributes first: if none of them
+       // is to be retained, the whole __attribute__((...)) goes
+       // away, otherwise the individual attributes get removed from
+       // the list.
+       std::vector<pp_tokens_range> to_remove;
+       std::size_t n_attrs = 0;
+       as.get_attribute_list().for_each_attribute
+	 ([&](const ast::attribute &attr) {
+	    ++n_attrs;
+	    const std::string &name = toks[attr.get_name_tok()].get_value();
+	    bool unknown;
+	    switch (_classify_externalization_attr(name, is_function,
+						  make_pointer, unknown)) {
+	    case externalization_attr_action::keep:
+	      if (unknown) {
+		code_remark remark
+		  (code_remark::severity::warning,
+		   ("unknown attribute \"" + name +
+		    "\" retained on pointer externalization declaration"),
+		   _ai.atu.get_pp_result(), attr.get_tokens_range());
+		_remarks.add(remark);
+	      }
+	      break;
+
+	    case externalization_attr_action::remove:
+	      to_remove.push_back(attr.get_tokens_range());
+	      break;
+
+	    case externalization_attr_action::unsupported:
+	      {
+		code_remark remark
+		  (code_remark::severity::fatal,
+		   ("attribute \"" + name +
+		    "\" not supported on pointer externalization declaration"),
+		   _ai.atu.get_pp_result(), attr.get_tokens_range());
+		_remarks.add(remark);
+		throw lp_except(remark);
+	      }
+	    }
+	    return true;
+	  });
+
+       if (to_remove.empty())
+	 return true;
+
+       if (to_remove.size() == n_attrs) {
+	 // Remove the whole attribute specifier including the
+	 // whitespace separating it from its neighbours: the
+	 // preceding one if there is any within the bounding range,
+	 // the trailing one otherwise.
+	 pp_tokens_range r = as.get_tokens_range();
+	 if (r.begin != bounding_range.begin) {
+	   while (r.begin != bounding_range.begin && is_ws(r.begin - 1))
+	     --r.begin;
+	 } else {
+	   while (r.end != bounding_range.end && is_ws(r.end))
+	     ++r.end;
+	 }
+	 tic.purge_subrange(r, false);
+	 return true;
+       }
+
+       // Remove individual attributes from the list together with
+       // the comma separating them from their successor, or, for the
+       // last attribute in the list, from their predecessor.
+       for (pp_tokens_range r : to_remove) {
+	 pp_token_index i = r.end;
+	 while (is_ws(i))
+	   ++i;
+	 if (toks[i].is_punctuator(",")) {
+	   r.end = i + 1;
+	   while (is_ws(r.end))
+	     ++r.end;
+	   tic.purge_subrange(r, false);
+	 } else {
+	   assert(toks[i].is_punctuator(")"));
+	   i = r.begin - 1;
+	   while (is_ws(i))
+	     --i;
+	   assert(toks[i].is_punctuator(","));
+	   r.begin = i;
+	   tic.purge_subrange(r, false);
+	 }
+       }
+
+       return true;
+     });
+}
+
 void _lp_writer::
 _rewrite_references(const deps_on &deps,
 		    depreprocessor::transformed_input_chunk &tic)
@@ -10046,6 +10442,6 @@ void klp::ccp::create_lp(const std::string &outfile,
     lp_creation_policy::allocated_ids_type{ai.get_allocated_ids()},
     remarks, output_remarks
   };
-  _lp_writer{ai, d}();
+  _lp_writer{ai, d, remarks}();
   d(outfile);
 }

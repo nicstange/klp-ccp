@@ -1558,6 +1558,9 @@ namespace klp
 	template <typename callable_type>
 	bool for_each_attribute(callable_type &&c);
 
+	template <typename callable_type>
+	bool for_each_attribute(callable_type &&c) const;
+
       private:
 	virtual _ast_entity* _get_child(const size_t i) const noexcept override;
 
@@ -1581,6 +1584,9 @@ namespace klp
 	virtual ~attribute_specifier() noexcept override;
 
 	attribute_list& get_attribute_list()
+	{ return _al; }
+
+	const attribute_list& get_attribute_list() const
 	{ return _al; }
 
       private:
@@ -1620,6 +1626,12 @@ namespace klp
 
 	template <typename callable_type>
 	bool for_each_attribute(callable_type &&c);
+
+	template <typename callable_type>
+	bool for_each_attribute(callable_type &&c) const;
+
+	template <typename callable_type>
+	bool for_each_attribute_specifier(callable_type &&c) const;
 
       private:
 	virtual _ast_entity* _get_child(const size_t i) const noexcept override;
@@ -3318,6 +3330,9 @@ namespace klp
 
 	template <typename callable_type>
 	bool for_each_attribute(callable_type &&c);
+
+	template <typename callable_type>
+	bool for_each_attribute_specifier_list(callable_type &&c) const;
 
       protected:
 	specifier_qualifier_list(const pp_tokens_range &tr) noexcept;

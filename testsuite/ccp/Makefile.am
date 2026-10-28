@@ -32,6 +32,20 @@ EXTRA_DIST = ccp.exp				\
 	ext-obj-9.c.expected			\
 	ext-obj-12.c				\
 	ext-obj-12.c.expected			\
+	ext-attrs-1.c			\
+	ext-attrs-1.c.expected		\
+	ext-attrs-2.c			\
+	ext-attrs-2.c.expected		\
+	ext-attrs-3.c			\
+	ext-attrs-3.c.expected		\
+	ext-attrs-4.c			\
+	ext-attrs-4.c.expected		\
+	ext-attrs-5.c			\
+	ext-attrs-5.c.expected		\
+	ext-attrs-6.c			\
+	ext-attrs-6.c.expected		\
+	ext-attrs-7.c			\
+	ext-attrs-7.c.expected		\
 	ext-fun-1.c				\
 	ext-fun-1.c.expected			\
 	fun-closure-1.c			\
