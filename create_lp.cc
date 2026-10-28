@@ -8643,6 +8643,27 @@ namespace
     typedef std::initializer_list<const ast::attribute_specifier_list*>
       _attribute_specifier_lists;
 
+    typedef std::function<bool(const ast::attribute&)> _attr_removal_predicate;
+
+    bool _attrs_need_removal(const ast::declaration_specifiers &ds,
+			     const _attribute_specifier_lists &asls,
+			     const _attr_removal_predicate &shall_remove);
+
+    void _remove_attrs(const ast::declaration_specifiers &ds,
+		       const _attribute_specifier_lists &asls,
+		       const _attr_removal_predicate &shall_remove,
+		       const pp_tokens_range &bounding_range,
+		       depreprocessor::transformed_input_chunk &tic);
+
+    void _remove_attrs(const ast::attribute_specifier_list &asl,
+		       const _attr_removal_predicate &shall_remove,
+		       const pp_tokens_range &bounding_range,
+		       depreprocessor::transformed_input_chunk &tic);
+
+    _attr_removal_predicate
+    _make_externalization_attr_removal_predicate(const bool is_function,
+						 const bool make_pointer);
+
     bool _externalization_attrs_need_removal
 	(const ast::declaration_specifiers &ds,
 	 const _attribute_specifier_lists &asls,
@@ -8655,9 +8676,21 @@ namespace
 	 const pp_tokens_range &bounding_range,
 	 depreprocessor::transformed_input_chunk &tic);
 
-    void _remove_externalization_attrs
-	(const ast::attribute_specifier_list &asl,
-	 const bool is_function, const bool make_pointer,
+    static bool _function_definition_has_internal_linkage
+	(const function_definition_info &fdi) noexcept;
+
+    _attr_removal_predicate _make_function_definition_attr_removal_predicate
+	(const bool internal_linkage);
+
+    bool _function_definition_attrs_need_removal
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool internal_linkage);
+
+    void _remove_function_definition_attrs
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool internal_linkage,
 	 const pp_tokens_range &bounding_range,
 	 depreprocessor::transformed_input_chunk &tic);
 
@@ -9124,6 +9157,12 @@ bool _lp_writer::_emit(function_init_declarator_info &fidi,
       }
       _apply_linkage_change_for_fun(fdi->sym_mod.new_linkage, false,
 				    l, ds, scs, tic);
+      // The prototype's attributes attach to the live patch's copy of
+      // the function.
+      _remove_function_definition_attrs
+	(ds, {id.get_asl_before(), id.get_asl_middle(), id.get_asl_after()},
+	 _function_definition_has_internal_linkage(*fdi),
+	 di.declaration.get_tokens_range(), tic);
     }
 
     _d.append(std::move(tic));
@@ -9292,6 +9331,9 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 			     tic);
     _apply_linkage_change_for_fun(fdi.sym_mod.new_linkage, false,
 				  l, ds, scs, tic);
+    _remove_function_definition_attrs(ds, {fd.get_asl()},
+			     _function_definition_has_internal_linkage(fdi),
+			     fd.get_tokens_range(), tic);
 
     for (const auto &di_in_fd : fdi.get_declarations()) {
       bool need_split = false;
@@ -9307,6 +9349,8 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 	    // have to get removed though.
 	    const function_info &fi = fidi_in_fd.fi;
 	    const ast::init_declarator &id = fidi_in_fd.init_declarator;
+	    const function_definition_info * const referenced_fdi =
+	      fi.get_function_definition();
 	    if (fi.externalize &&
 		(_externalization_attrs_need_removal
 		   (ds_in_fd,
@@ -9315,6 +9359,15 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 		    true, fi.externalized_sym_mod.make_pointer) ||
 		 (fi.externalized_sym_mod.make_pointer &&
 		  ds_in_fd.is_inline()))) {
+	      need_split = true;
+	    } else if (!fi.externalize && referenced_fdi &&
+		       (referenced_fdi->fi.in_closure ||
+			referenced_fdi->is_patched) &&
+		       _function_definition_attrs_need_removal
+			 (ds_in_fd,
+			  {id.get_asl_before(), id.get_asl_middle(),
+			   id.get_asl_after()},
+			  _function_definition_has_internal_linkage(*referenced_fdi))) {
 	      need_split = true;
 	    }
 	  },
@@ -9437,6 +9490,17 @@ bool _lp_writer::_emit(function_definition_info &fdi,
 		_apply_sym_mod_to_id_tok(referenced_fdi->sym_mod,
 					 false,
 					 id_tok_pos, decl_tic);
+	      }
+	      if (!fidi_in_fd_fi.externalize && referenced_fdi &&
+		  (referenced_fdi->fi.in_closure ||
+		   referenced_fdi->is_patched)) {
+		const ast::init_declarator &id = fidi_in_fd.init_declarator;
+		_remove_function_definition_attrs
+		  (ds_in_fd,
+		   {id.get_asl_before(), id.get_asl_middle(),
+		    id.get_asl_after()},
+		   _function_definition_has_internal_linkage(*referenced_fdi),
+		   di_in_fd.declaration.get_tokens_range(), decl_tic);
 	      }
 
 	      _d.append(std::move(decl_tic));
@@ -10138,19 +10202,13 @@ _set_storage_class(const ast::declaration_specifiers &ds,
   }
 }
 
-bool _lp_writer::_externalization_attrs_need_removal
-	(const ast::declaration_specifiers &ds,
-	 const _attribute_specifier_lists &asls,
-	 const bool is_function, const bool make_pointer)
+bool _lp_writer::_attrs_need_removal(const ast::declaration_specifiers &ds,
+				     const _attribute_specifier_lists &asls,
+				     const _attr_removal_predicate &shall_remove)
 {
-  const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
-  bool unknown;
   auto &&check_attr =
     [&](const ast::attribute &attr) {
-      const std::string &name = toks[attr.get_name_tok()].get_value();
-      return (_classify_externalization_attr(name, is_function, make_pointer,
-					     unknown) ==
-	      externalization_attr_action::keep);
+      return !shall_remove(attr);
     };
 
   if (!ds.for_each_attribute_specifier_list
@@ -10168,38 +10226,32 @@ bool _lp_writer::_externalization_attrs_need_removal
   return false;
 }
 
-// Remove the attributes not to be retained on an externalization
-// declaration from the declaration specifiers and the given
-// attribute specifier lists attached to the declarator. Attributes
-// within the declarator, e.g. on pointer derivations, are part of
-// the type and left alone.
-void _lp_writer::_remove_externalization_attrs
-	(const ast::declaration_specifiers &ds,
-	 const _attribute_specifier_lists &asls,
-	 const bool is_function, const bool make_pointer,
-	 const pp_tokens_range &bounding_range,
-	 depreprocessor::transformed_input_chunk &tic)
+// Remove the attributes selected by the predicate from the
+// declaration specifiers and the given attribute specifier lists
+// attached to the declarator. Attributes within the declarator,
+// e.g. on pointer derivations, are part of the type and left alone.
+void _lp_writer::_remove_attrs(const ast::declaration_specifiers &ds,
+			       const _attribute_specifier_lists &asls,
+			       const _attr_removal_predicate &shall_remove,
+			       const pp_tokens_range &bounding_range,
+			       depreprocessor::transformed_input_chunk &tic)
 {
   ds.for_each_attribute_specifier_list
     ([&](const ast::attribute_specifier_list &asl) {
-       _remove_externalization_attrs(asl, is_function, make_pointer,
-				     bounding_range, tic);
+       _remove_attrs(asl, shall_remove, bounding_range, tic);
        return true;
      });
 
   for (const ast::attribute_specifier_list * const asl : asls) {
-    if (asl) {
-      _remove_externalization_attrs(*asl, is_function, make_pointer,
-				    bounding_range, tic);
-    }
+    if (asl)
+      _remove_attrs(*asl, shall_remove, bounding_range, tic);
   }
 }
 
-void _lp_writer::_remove_externalization_attrs
-	(const ast::attribute_specifier_list &asl,
-	 const bool is_function, const bool make_pointer,
-	 const pp_tokens_range &bounding_range,
-	 depreprocessor::transformed_input_chunk &tic)
+void _lp_writer::_remove_attrs(const ast::attribute_specifier_list &asl,
+			       const _attr_removal_predicate &shall_remove,
+			       const pp_tokens_range &bounding_range,
+			       depreprocessor::transformed_input_chunk &tic)
 {
   const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
 
@@ -10220,36 +10272,8 @@ void _lp_writer::_remove_externalization_attrs
        as.get_attribute_list().for_each_attribute
 	 ([&](const ast::attribute &attr) {
 	    ++n_attrs;
-	    const std::string &name = toks[attr.get_name_tok()].get_value();
-	    bool unknown;
-	    switch (_classify_externalization_attr(name, is_function,
-						  make_pointer, unknown)) {
-	    case externalization_attr_action::keep:
-	      if (unknown) {
-		code_remark remark
-		  (code_remark::severity::warning,
-		   ("unknown attribute \"" + name +
-		    "\" retained on pointer externalization declaration"),
-		   _ai.atu.get_pp_result(), attr.get_tokens_range());
-		_remarks.add(remark);
-	      }
-	      break;
-
-	    case externalization_attr_action::remove:
+	    if (shall_remove(attr))
 	      to_remove.push_back(attr.get_tokens_range());
-	      break;
-
-	    case externalization_attr_action::unsupported:
-	      {
-		code_remark remark
-		  (code_remark::severity::fatal,
-		   ("attribute \"" + name +
-		    "\" not supported on pointer externalization declaration"),
-		   _ai.atu.get_pp_result(), attr.get_tokens_range());
-		_remarks.add(remark);
-		throw lp_except(remark);
-	      }
-	    }
 	    return true;
 	  });
 
@@ -10298,6 +10322,185 @@ void _lp_writer::_remove_externalization_attrs
 
        return true;
      });
+}
+
+// The predicate selecting the attributes to remove from an
+// externalization declaration. Reports unknown attributes retained on
+// function make_pointer externalizations and rejects unsupported
+// ones.
+_lp_writer::_attr_removal_predicate _lp_writer::
+_make_externalization_attr_removal_predicate(const bool is_function,
+					     const bool make_pointer)
+{
+  return [this, is_function, make_pointer](const ast::attribute &attr) {
+    const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
+    const std::string &name = toks[attr.get_name_tok()].get_value();
+    bool unknown;
+    switch (_classify_externalization_attr(name, is_function, make_pointer,
+					   unknown)) {
+    case externalization_attr_action::keep:
+      if (unknown) {
+	code_remark remark
+	  (code_remark::severity::warning,
+	   ("unknown attribute \"" + name +
+	    "\" retained on pointer externalization declaration"),
+	   _ai.atu.get_pp_result(), attr.get_tokens_range());
+	_remarks.add(remark);
+      }
+      return false;
+
+    case externalization_attr_action::remove:
+      return true;
+
+    case externalization_attr_action::unsupported:
+      {
+	code_remark remark
+	  (code_remark::severity::fatal,
+	   ("attribute \"" + name +
+	    "\" not supported on pointer externalization declaration"),
+	   _ai.atu.get_pp_result(), attr.get_tokens_range());
+	_remarks.add(remark);
+	throw lp_except(remark);
+      }
+    }
+
+    assert(0);
+    __builtin_unreachable();
+  };
+}
+
+bool _lp_writer::_externalization_attrs_need_removal
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer)
+{
+  return _attrs_need_removal
+    (ds, asls,
+     _make_externalization_attr_removal_predicate(is_function, make_pointer));
+}
+
+void _lp_writer::_remove_externalization_attrs
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool is_function, const bool make_pointer,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic)
+{
+  _remove_attrs
+    (ds, asls,
+     _make_externalization_attr_removal_predicate(is_function, make_pointer),
+     bounding_range, tic);
+}
+
+// Whether a function definition emitted into the live patch, either
+// as a patched function or as a member of the closure, will have
+// internal linkage there.
+bool _lp_writer::_function_definition_has_internal_linkage
+	(const function_definition_info &fdi) noexcept
+{
+  using linkage_change =
+    lp_creation_policy::symbol_modification::linkage_change;
+
+  switch (fdi.sym_mod.new_linkage) {
+  case linkage_change::lc_make_static:
+    return true;
+
+  case linkage_change::lc_make_extern:
+    return false;
+
+  case linkage_change::lc_none:
+    return (fdi.function_definition.get_linkage().get_linkage_kind() ==
+	    ast::linkage::linkage_kind::internal);
+  }
+
+  assert(0);
+  __builtin_unreachable();
+}
+
+// The predicate selecting the attributes to remove from function
+// definitions emitted into the live patch and from the prototypes
+// referring to them.
+//
+// The live patch module has a lifetime independent of the patched
+// target's and its functions can run at any time: attributes placing
+// the function into a section freed or discarded after module
+// initialization or registering it in the constructor or destructor
+// tables must not be retained. Sections get removed unconditionally,
+// because a function is always valid in the module's ordinary text
+// and keeping an unknown section would fail dangerously while
+// dropping a semantically meaningful one, like the kernel's
+// .kprobes.text, fails safely. Similarly, the kernel disables
+// retpolines for init-only code with indirect_branch("keep") resp.
+// function_return("keep"), which must not carry over to code running
+// after boot. The symbol related attributes weak, symver and the
+// alias ones don't apply to the module's own copy either. visibility
+// and externally_visible are removed only if the copy gets internal
+// linkage, where GCC would warn about them. Everything else describes
+// the body's code generation, the calling convention or call
+// semantics and remains correct for the copy.
+_lp_writer::_attr_removal_predicate _lp_writer::
+_make_function_definition_attr_removal_predicate(const bool internal_linkage)
+{
+  return [this, internal_linkage](const ast::attribute &attr) {
+    const pp_tokens &toks = _ai.atu.get_pp_result().get_pp_tokens();
+    std::string name = toks[attr.get_name_tok()].get_value();
+    if (name.size() > 4 && name.compare(0, 2, "__") == 0 &&
+	name.compare(name.size() - 2, 2, "__") == 0) {
+      name = name.substr(2, name.size() - 4);
+    }
+
+    if (_attr_in_set(name, {
+	  "alias", "constructor", "destructor", "ifunc", "section", "symver",
+	  "weak", "weakref"
+	})) {
+      return true;
+    }
+
+    if (internal_linkage &&
+	_attr_in_set(name, {"externally_visible", "visibility"})) {
+      return true;
+    }
+
+    if (_attr_in_set(name, {"function_return", "indirect_branch"})) {
+      // Remove the mitigation disabling "keep" variant only.
+      const ast::expr_list * const params = attr.get_params();
+      if (params && params->size() == 1) {
+	const pp_tokens_range &r = (*params)[0].get_tokens_range();
+	// A string literal token's value is its contents without
+	// the delimiters.
+	if (r.end == r.begin + 1 &&
+	    toks[r.begin].is_type_any_of<pp_token::type::str>() &&
+	    toks[r.begin].get_value() == "keep") {
+	  return true;
+	}
+      }
+      return false;
+    }
+
+    return false;
+  };
+}
+
+bool _lp_writer::_function_definition_attrs_need_removal
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool internal_linkage)
+{
+  return _attrs_need_removal
+    (ds, asls,
+     _make_function_definition_attr_removal_predicate(internal_linkage));
+}
+
+void _lp_writer::_remove_function_definition_attrs
+	(const ast::declaration_specifiers &ds,
+	 const _attribute_specifier_lists &asls,
+	 const bool internal_linkage,
+	 const pp_tokens_range &bounding_range,
+	 depreprocessor::transformed_input_chunk &tic)
+{
+  _remove_attrs(ds, asls,
+		_make_function_definition_attr_removal_predicate(internal_linkage),
+		bounding_range, tic);
 }
 
 // Remove the function specifiers, i.e. 'inline', from a function's

@@ -52,7 +52,15 @@ EXTRA_DIST = ccp.exp				\
 	ext-fun-2.c.expected			\
 	ext-fun-3.c				\
 	ext-fun-3.c.expected			\
-	fun-closure-1.c			\
+	fun-attrs-1.c				\
+	fun-attrs-1.c.expected			\
+	fun-attrs-2.c				\
+	fun-attrs-2.c.expected			\
+	fun-attrs-3.c				\
+	fun-attrs-3.c.expected			\
+	fun-attrs-4.c				\
+	fun-attrs-4.c.expected			\
+	fun-closure-1.c				\
 	fun-closure-1.c.expected		\
 	fun-closure-2.c			\
 	fun-closure-2.c.expected		\
